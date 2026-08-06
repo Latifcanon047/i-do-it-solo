@@ -11,6 +11,7 @@ import {
   useNodesState,
   useEdgesState,
   useReactFlow,
+  PanOnScrollMode,
   type OnConnect,
   type Node,
   type Edge,
@@ -20,6 +21,7 @@ import { useRouter } from "next/navigation";
 import MindMapNode from "./MindMapNode";
 import EditorToolbar from "./EditorToolbar";
 import SearchOverlay from "./SearchOverlay";
+import StyleSidebar from "./StyleSidebar";
 
 const nodeTypes = { mindmap: MindMapNode };
 interface MindMapData {
@@ -53,8 +55,9 @@ function EditorCanvas({ mindMap }: Props) {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const saveTimeout = useRef<NodeJS.Timeout | null>(null);
   const isFirstRender = useRef(true);
+  const [stylePanelOpen, setStylePanelOpen] = useState(false);
+  const selectedNode = nodes.find((n) => n.selected) ?? null;
   const { screenToFlowPosition, fitView } = useReactFlow();
-
   const onConnect: OnConnect = useCallback(
     (connection) => setEdges((eds) => addEdge(connection, eds)),
     [setEdges],
@@ -147,13 +150,13 @@ function EditorCanvas({ mindMap }: Props) {
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
   const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
 
-  // Sekarang matches nyimpen id + label, biar bisa ditampilin di dropdown list
+  // Sekarang: query kosong = tampilin semua node, query ada = filter yang cocok aja
   const matches = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase();
-    return nodes
-      .filter((n) => (n.data.label as string)?.toLowerCase().includes(q))
-      .map((n) => ({ id: n.id, label: n.data.label as string }));
+    const q = searchQuery.trim().toLowerCase();
+    const source = q
+      ? nodes.filter((n) => (n.data.label as string)?.toLowerCase().includes(q))
+      : nodes;
+    return source.map((n) => ({ id: n.id, label: n.data.label as string }));
   }, [nodes, searchQuery]);
 
   useEffect(() => {
@@ -281,12 +284,100 @@ function EditorCanvas({ mindMap }: Props) {
     setEdges((eds) => eds.filter((e) => !e.selected));
   }
 
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Kalau lagi ngetik di input/textarea, skip semua shortcut
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+
+      const selected = nodes.find((n) => n.selected);
+
+      // Delete / Backspace — hapus selected
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (!selected) return;
+        e.preventDefault();
+        handleDeleteSelected();
+        return;
+      }
+
+      // Tab — tambah CHILD node
+      if (e.key === "Tab") {
+        if (!selected) return;
+        e.preventDefault();
+        const id = crypto.randomUUID();
+        const newNode: Node = {
+          id,
+          type: "mindmap",
+          position: {
+            x: selected.position.x + 200,
+            y: selected.position.y,
+          },
+          data: { label: "New Node" },
+        };
+        const newEdge: Edge = {
+          id: `e-${selected.id}-${id}`,
+          source: selected.id,
+          target: id,
+        };
+        setNodes((nds) => [...nds, newNode]);
+        setEdges((eds) => [...eds, newEdge]);
+        return;
+      }
+
+      // Enter — tambah SIBLING node (parent sama)
+      if (e.key === "Enter") {
+        if (!selected) return;
+        e.preventDefault();
+        const parentEdge = edges.find((ed) => ed.target === selected.id);
+        const id = crypto.randomUUID();
+        const newNode: Node = {
+          id,
+          type: "mindmap",
+          position: {
+            x: selected.position.x,
+            y: selected.position.y + 80,
+          },
+          data: { label: "New Node" },
+        };
+        setNodes((nds) => [...nds, newNode]);
+        if (parentEdge) {
+          const newEdge: Edge = {
+            id: `e-${parentEdge.source}-${id}`,
+            source: parentEdge.source,
+            target: id,
+          };
+          setEdges((eds) => [...eds, newEdge]);
+        }
+        return;
+      }
+
+      // Space — edit mode, block all
+      if (e.key === " ") {
+        if (!selected) return;
+        e.preventDefault();
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === selected.id
+              ? { ...n, data: { ...n.data, editing: true } }
+              : n,
+          ),
+        );
+        return;
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [nodes, edges, searchOpen]);
+
   return (
     <div className="w-screen h-screen flex flex-col">
       <EditorToolbar
         title={mindMap.title}
         saveStatus={saveStatus}
         onAddNode={handleAddNode}
+        onStyleClick={() => setStylePanelOpen((v) => !v)}
+        styleOpen={stylePanelOpen}
         onDeleteSelected={handleDeleteSelected}
         onBack={() => router.push("/dashboard")}
         onSearchClick={() => setSearchOpen(true)}
@@ -305,7 +396,7 @@ function EditorCanvas({ mindMap }: Props) {
         />
       )}
 
-      <div className="flex-1">
+      <div className="flex-1 relative">
         <ReactFlow
           nodes={displayNodes}
           edges={displayEdges}
@@ -314,11 +405,23 @@ function EditorCanvas({ mindMap }: Props) {
           onConnect={onConnect}
           nodeTypes={nodeTypes}
           fitView
+          panOnScroll={true} // scroll = geser layar (bukan zoom)
+          panOnScrollMode={PanOnScrollMode.Free} // bebas arah (horizontal + vertikal)
+          zoomOnScroll={false} // scroll gak zoom lagi
+          zoomOnPinch={true} // pinch = zoom (touchpad/mobile)
+          selectionOnDrag={false} // drag = pan, bukan select area
+          panOnDrag={true} // drag canvas = pan
         >
           <Background />
           <Controls />
           <MiniMap />
         </ReactFlow>
+        {stylePanelOpen && (
+          <StyleSidebar
+            selectedNode={selectedNode}
+            onClose={() => setStylePanelOpen(false)}
+          />
+        )}
       </div>
     </div>
   );

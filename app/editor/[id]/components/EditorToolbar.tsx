@@ -1,6 +1,6 @@
 "use client";
 
-import { Search } from "lucide-react";
+import { Palette, Search } from "lucide-react";
 
 type SaveStatus = "idle" | "saving" | "saved";
 
@@ -11,6 +11,8 @@ interface Props {
   onDeleteSelected: () => void;
   onBack: () => void;
   onSearchClick: () => void;
+  onStyleClick: () => void;
+  styleOpen: boolean;
 }
 
 export default function EditorToolbar({
@@ -20,6 +22,8 @@ export default function EditorToolbar({
   onDeleteSelected,
   onBack,
   onSearchClick,
+  onStyleClick,
+  styleOpen,
 }: Props) {
   return (
     <div className="bg-white border-b px-4 py-2 flex items-center gap-3">
@@ -46,6 +50,7 @@ export default function EditorToolbar({
 
       <div className="flex-1" />
 
+      {/* Tombol Search */}
       <button
         onClick={onSearchClick}
         className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100"
@@ -53,6 +58,20 @@ export default function EditorToolbar({
       >
         <Search size={16} />
       </button>
+
+      {/* Tombol Style Sidebar */}
+      <button
+        onClick={onStyleClick}
+        className={`p-1.5 rounded-lg transition ${
+          styleOpen
+            ? "bg-blue-100 text-blue-600"
+            : "text-gray-500 hover:bg-gray-100"
+        }`}
+        title="Style node (warna & icon)"
+      >
+        <Palette size={16} />
+      </button>
+
       <button
         onClick={onAddNode}
         className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-blue-700"

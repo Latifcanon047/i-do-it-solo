@@ -12,10 +12,10 @@ interface Props {
   value: string;
   onChange: (v: string) => void;
   matches: MatchItem[];
-  currentIndex: number; // -1 kalau belum ada yang aktif
+  currentIndex: number;
   onNext: () => void;
   onPrev: () => void;
-  onSelect: (index: number) => void; // klik salah satu item di list
+  onSelect: (index: number) => void;
   onClose: () => void;
 }
 
@@ -31,7 +31,6 @@ export default function SearchOverlay({
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-focus tiap overlay muncul
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -52,9 +51,9 @@ export default function SearchOverlay({
   const hasQuery = value.trim().length > 0;
 
   return (
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-30 w-80">
+    <div className="fixed top-16 left-4 z-30 w-72 bg-white rounded-lg shadow-lg border border-gray-200 flex flex-col max-h-[calc(100vh-6rem)]">
       {/* Search bar */}
-      <div className="bg-white rounded-lg shadow-lg border border-gray-200 flex items-center gap-2 px-3 py-2">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 shrink-0">
         <Search size={16} className="text-gray-400 shrink-0" />
         <input
           ref={inputRef}
@@ -64,25 +63,6 @@ export default function SearchOverlay({
           placeholder="Cari node..."
           className="flex-1 text-sm outline-none min-w-0"
         />
-        <span className="text-xs text-gray-400 shrink-0 tabular-nums">
-          {matches.length > 0 ? `${currentIndex + 1}/${matches.length}` : "0/0"}
-        </span>
-        <button
-          onClick={onPrev}
-          disabled={matches.length === 0}
-          className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 shrink-0"
-          title="Sebelumnya (Shift+Enter)"
-        >
-          <ChevronUp size={14} className="text-gray-600" />
-        </button>
-        <button
-          onClick={onNext}
-          disabled={matches.length === 0}
-          className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 shrink-0"
-          title="Berikutnya (Enter)"
-        >
-          <ChevronDown size={14} className="text-gray-600" />
-        </button>
         <button
           onClick={onClose}
           className="p-1 rounded hover:bg-gray-100 shrink-0"
@@ -92,28 +72,57 @@ export default function SearchOverlay({
         </button>
       </div>
 
-      {/* Dropdown list hasil pencarian */}
+      {/* Info jumlah hasil + navigasi — hanya muncul saat ada query aktif */}
       {hasQuery && (
-        <div className="mt-1 bg-white rounded-lg shadow-lg border border-gray-200 max-h-64 overflow-y-auto">
-          {matches.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-gray-400">
-              Tidak ada hasil
-            </div>
-          ) : (
-            matches.map((m, i) => (
-              <button
-                key={m.id}
-                onClick={() => onSelect(i)}
-                className={`w-full text-left px-3 py-2 text-sm truncate hover:bg-gray-50 ${
-                  i === currentIndex
-                    ? "bg-blue-50 text-blue-700"
-                    : "text-gray-700"
-                }`}
-              >
-                {m.label || "(tanpa label)"}
-              </button>
-            ))
-          )}
+        <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-100 shrink-0">
+          <span className="text-xs text-gray-400 tabular-nums">
+            {matches.length > 0
+              ? `${currentIndex + 1}/${matches.length} hasil`
+              : "Tidak ada hasil"}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={onPrev}
+              disabled={matches.length === 0}
+              className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"
+              title="Sebelumnya (Shift+Enter)"
+            >
+              <ChevronUp size={14} className="text-gray-600" />
+            </button>
+            <button
+              onClick={onNext}
+              disabled={matches.length === 0}
+              className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"
+              title="Berikutnya (Enter)"
+            >
+              <ChevronDown size={14} className="text-gray-600" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* List node — selalu tampil, isinya semua node kalau query kosong */}
+      {!hasQuery && (
+        <div className="px-3 py-1.5 border-b border-gray-100 shrink-0">
+          <span className="text-xs text-gray-400">{matches.length} node</span>
+        </div>
+      )}
+
+      {matches.length > 0 && (
+        <div className="overflow-y-auto">
+          {matches.map((m, i) => (
+            <button
+              key={m.id}
+              onClick={() => onSelect(i)}
+              className={`w-full text-left px-3 py-2 text-sm truncate hover:bg-gray-50 ${
+                i === currentIndex
+                  ? "bg-blue-50 text-blue-700"
+                  : "text-gray-700"
+              }`}
+            >
+              {m.label || "(tanpa label)"}
+            </button>
+          ))}
         </div>
       )}
     </div>
