@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
             id: "root",
             type: "mindmap",
             position: { x: 0, y: 0 },
-            data: { label: title },
+            data: { label: title, isRoot: true },
           },
         ],
         edges: [],

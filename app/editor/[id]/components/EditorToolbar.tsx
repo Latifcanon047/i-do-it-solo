@@ -7,8 +7,6 @@ type SaveStatus = "idle" | "saving" | "saved";
 interface Props {
   title: string;
   saveStatus: SaveStatus;
-  onAddNode: () => void;
-  onDeleteSelected: () => void;
   onBack: () => void;
   onSearchClick: () => void;
   onStyleClick: () => void;
@@ -18,8 +16,6 @@ interface Props {
 export default function EditorToolbar({
   title,
   saveStatus,
-  onAddNode,
-  onDeleteSelected,
   onBack,
   onSearchClick,
   onStyleClick,
@@ -70,19 +66,6 @@ export default function EditorToolbar({
         title="Style node (warna & icon)"
       >
         <Palette size={16} />
-      </button>
-
-      <button
-        onClick={onAddNode}
-        className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-blue-700"
-      >
-        + Add Node
-      </button>
-      <button
-        onClick={onDeleteSelected}
-        className="bg-red-500 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-red-600"
-      >
-        Delete Selected
       </button>
     </div>
   );

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Handle, Position, useReactFlow, type NodeProps } from "@xyflow/react";
-import { Minus } from "lucide-react";
+import { Minus, Plus } from "lucide-react";
 import {
   Star,
   Flag,
@@ -22,6 +22,7 @@ import {
   Briefcase,
   type LucideIcon,
 } from "lucide-react";
+import { useMindMapStore } from "@/store/mindMapStore";
 
 export const ICON_MAP: Record<string, LucideIcon> = {
   star: Star,
@@ -44,6 +45,8 @@ export const ICON_MAP: Record<string, LucideIcon> = {
 
 export default function MindMapNode({ id, data, selected }: NodeProps) {
   const { updateNodeData } = useReactFlow();
+  const addChild = useMindMapStore((s) => s.addChild);
+  const addSibling = useMindMapStore((s) => s.addSibling);
 
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(data.label as string);
@@ -58,6 +61,14 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   const hasChildren = childCount > 0;
   const searchMatch = !!data.searchMatch;
   const searchActive = !!data.searchActive;
+  const isRoot = !!data.isRoot;
+
+  useEffect(() => {
+    if (data.editing) {
+      setEditing(true);
+      updateNodeData(id, { editing: false });
+    }
+  }, [data.editing]);
 
   function handleDoubleClick() {
     setEditing(true);
@@ -73,6 +84,16 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
     updateNodeData(id, { collapsed: !collapsed });
   }
 
+  function handleAddChild(e: React.MouseEvent) {
+    e.stopPropagation();
+    addChild(id);
+  }
+
+  function handleAddSibling(e: React.MouseEvent) {
+    e.stopPropagation();
+    addSibling(id);
+  }
+
   const ringClass = searchActive
     ? "ring-4 ring-orange-400"
     : selected
@@ -83,7 +104,11 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
   return (
     <div
-      className={`relative px-4 py-2 rounded-xl border-2 shadow-sm min-w-30 text-center cursor-pointer transition ${ringClass}`}
+      className={`relative rounded-xl border-2 shadow-sm text-center cursor-pointer transition ${
+        isRoot
+          ? "px-6 py-4 min-w-40 border-[3px] shadow-md"
+          : "px-4 py-2 min-w-30"
+      } ${ringClass}`}
       style={{ backgroundColor: bgColor, borderColor: borderColor }}
       onDoubleClick={handleDoubleClick}
       onMouseEnter={() => setHovered(true)}
@@ -93,7 +118,10 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
       <div className="flex items-center justify-center gap-1.5">
         {IconComponent && (
-          <IconComponent size={14} className="text-gray-700 shrink-0" />
+          <IconComponent
+            size={isRoot ? 18 : 14}
+            className="text-gray-700 shrink-0"
+          />
         )}
         {editing ? (
           <input
@@ -102,10 +130,16 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
             onChange={(e) => setLabel(e.target.value)}
             onBlur={handleBlur}
             onKeyDown={(e) => e.key === "Enter" && handleBlur()}
-            className="text-sm font-medium text-gray-800 outline-none w-full text-center bg-transparent"
+            className={`outline-none w-full text-center bg-transparent text-gray-800 font-medium ${
+              isRoot ? "text-base font-semibold" : "text-sm"
+            }`}
           />
         ) : (
-          <span className="text-sm font-medium text-gray-800">{label}</span>
+          <span
+            className={`text-gray-800 font-medium ${isRoot ? "text-base font-semibold" : "text-sm"}`}
+          >
+            {label}
+          </span>
         )}
       </div>
 
@@ -120,6 +154,30 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
           title={collapsed ? `Expand (${childCount} tersembunyi)` : "Collapse"}
         >
           {collapsed ? childCount : <Minus size={10} />}
+        </button>
+      )}
+
+      {/* Tombol + kanan → tambah child (sama seperti Tab) */}
+      {hovered && !collapsed && (
+        <button
+          onClick={handleAddChild}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute -right-2 -top-2 w-5 h-5 rounded-full bg-blue-500 border border-blue-600 shadow flex items-center justify-center text-white hover:bg-blue-600 z-10"
+          title="Tambah child node (Tab)"
+        >
+          <Plus size={10} />
+        </button>
+      )}
+
+      {/* Tombol + bawah → tambah sibling (sama seperti Enter), tidak muncul di root */}
+      {hovered && !isRoot && (
+        <button
+          onClick={handleAddSibling}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-blue-500 border border-blue-600 shadow flex items-center justify-center text-white hover:bg-blue-600 z-10"
+          title="Tambah sibling node (Enter)"
+        >
+          <Plus size={10} />
         </button>
       )}
     </div>
