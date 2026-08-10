@@ -1,7 +1,8 @@
 import type { Node, Edge } from "@xyflow/react";
 
 // ===== CONSTANTS =====
-export const LEVEL_SPACING = 220;
+const LEVEL_SPACING = 220;
+const MIN_GAP = 80; // jarak minimum tepi kanan parent ke tepi kiri child
 export const SIBLING_SPACING = 90;
 export const TREE_GAP = 150;
 
@@ -72,6 +73,7 @@ export function layoutForest(
 ): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>();
   const parentTargets = new Set(edges.map((e) => e.target));
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
 
   const roots = nodes.filter(
     (n) => !parentTargets.has(n.id) && !hiddenNodeIds.has(n.id),
@@ -80,26 +82,44 @@ export function layoutForest(
 
   let cursorY = 0;
 
-  function layoutNode(nodeId: string, depth: number, anchorX: number): number {
+  function layoutNode(nodeId: string, parentId: string | null): number {
+    const node = nodeMap.get(nodeId);
+
     const children = (childrenMap.get(nodeId) || []).filter(
       (cid) => !hiddenNodeIds.has(cid),
     );
 
-    if (children.length === 0) {
-      const y = cursorY;
-      positions.set(nodeId, { x: anchorX + depth * LEVEL_SPACING, y });
-      cursorY += SIBLING_SPACING;
-      return y;
+    // Hitung X dulu sebelum rekursi
+    let x: number;
+    if (parentId === null) {
+      x = node?.position.x ?? 0;
+    } else {
+      const parentPos = positions.get(parentId)!;
+      const parentNode = nodeMap.get(parentId);
+      const parentWidth = parentNode?.measured?.width ?? 150;
+      x = parentPos.x + parentWidth + MIN_GAP;
     }
 
-    const childYs = children.map((cid) => layoutNode(cid, depth + 1, anchorX));
+    if (children.length === 0) {
+      positions.set(nodeId, { x, y: cursorY });
+      cursorY += SIBLING_SPACING;
+      return cursorY - SIBLING_SPACING;
+    }
+
+    // Set posisi sementara dulu dengan x yang sudah dihitung
+    // supaya child bisa baca parentPos waktu rekursi
+    positions.set(nodeId, { x, y: 0 });
+
+    const childYs = children.map((cid) => layoutNode(cid, nodeId));
     const y = (childYs[0] + childYs[childYs.length - 1]) / 2;
-    positions.set(nodeId, { x: anchorX + depth * LEVEL_SPACING, y });
+
+    // Update y setelah semua child selesai
+    positions.set(nodeId, { x, y });
     return y;
   }
 
   for (const root of roots) {
-    layoutNode(root.id, 0, root.position.x);
+    layoutNode(root.id, null);
     cursorY += TREE_GAP;
   }
 
@@ -147,4 +167,58 @@ export function calcSiblingPosition(
     : node.position.y + SIBLING_SPACING;
 
   return { x, y };
+}
+
+//ini boleh di harus belum kepake. tapi di pertahanin juga gak apa apa dulu
+export function rerootEdges(
+  nodeId: string,
+  targetId: string,
+  edges: Edge[],
+  parentMap: Map<string, string>,
+): Edge[] {
+  // Susun jalur dari D naik ke atas sampai ketemu T (inclusive)
+  const path: string[] = [nodeId];
+  let current = parentMap.get(nodeId);
+  while (current) {
+    path.push(current);
+    if (current === targetId) break;
+    current = parentMap.get(current);
+  }
+
+  const grandParent = parentMap.get(targetId); // parent-nya T (kalau ada)
+
+  // Edge lama di sepanjang chain yang mau dibalik
+  const chainPairs = new Set<string>();
+  for (let i = 0; i < path.length - 1; i++) {
+    chainPairs.add(`${path[i + 1]}>${path[i]}`); // parent->child asli
+  }
+
+  const filtered = edges.filter((e) => {
+    if (chainPairs.has(`${e.source}>${e.target}`)) return false;
+    if (grandParent && e.source === grandParent && e.target === targetId)
+      return false;
+    return true;
+  });
+
+  const newEdges = [...filtered];
+
+  // Balik arah chain: D->p1->p2->...->T
+  for (let i = 0; i < path.length - 1; i++) {
+    newEdges.push({
+      id: `e-${path[i]}-${path[i + 1]}`,
+      source: path[i],
+      target: path[i + 1],
+    });
+  }
+
+  // Grandparent sekarang connect ke D, gantiin posisi T
+  if (grandParent) {
+    newEdges.push({
+      id: `e-${grandParent}-${nodeId}`,
+      source: grandParent,
+      target: nodeId,
+    });
+  }
+
+  return newEdges;
 }

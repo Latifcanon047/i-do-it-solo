@@ -62,6 +62,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   const searchMatch = !!data.searchMatch;
   const searchActive = !!data.searchActive;
   const isRoot = !!data.isRoot;
+  const isGhost = !!data.isGhost;
 
   useEffect(() => {
     if (data.editing) {
@@ -94,13 +95,39 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
     addSibling(id);
   }
 
-  const ringClass = searchActive
-    ? "ring-4 ring-orange-400"
-    : selected
-      ? "ring-2 ring-blue-400"
-      : searchMatch
-        ? "ring-2 ring-yellow-400"
+  const dropZone = data.dropZone as
+    | "before"
+    | "after"
+    | "child"
+    | "blocked"
+    | null
+    | undefined;
+
+  const ringClass =
+    dropZone === "blocked"
+      ? "ring-4 ring-red-500 opacity-60"
+      : dropZone === "child"
+        ? "ring-4 ring-green-500"
+        : searchActive
+          ? "ring-4 ring-orange-400"
+          : selected
+            ? "ring-2 ring-blue-400"
+            : searchMatch
+              ? "ring-2 ring-yellow-400"
+              : "";
+  const edgeIndicatorClass =
+    dropZone === "before"
+      ? "border-t-4 border-t-blue-500"
+      : dropZone === "after"
+        ? "border-b-4 border-b-blue-500"
         : "";
+  if (isGhost) {
+    return (
+      <div className="px-4 py-2 min-w-30 rounded-xl border-2 border-dashed border-pink-500 bg-pink-200 text-pink-700 text-sm font-medium text-center pointer-events-none select-none">
+        {label}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -108,13 +135,13 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
         isRoot
           ? "px-6 py-4 min-w-40 border-[3px] shadow-md"
           : "px-4 py-2 min-w-30"
-      } ${ringClass}`}
+      } ${ringClass} ${edgeIndicatorClass}`}
       style={{ backgroundColor: bgColor, borderColor: borderColor }}
       onDoubleClick={handleDoubleClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <Handle type="target" position={Position.Left} />
+      <Handle type="target" position={Position.Left} isConnectable={false} />
 
       <div className="flex items-center justify-center gap-1.5">
         {IconComponent && (
@@ -143,8 +170,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
         )}
       </div>
 
-      <Handle type="source" position={Position.Right} />
-
+      <Handle type="source" position={Position.Right} isConnectable={false} />
       {/* Tombol collapse/expand */}
       {hasChildren && (hovered || collapsed) && (
         <button
