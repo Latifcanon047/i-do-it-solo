@@ -12,6 +12,7 @@ import {
   useViewport,
   type Node,
   type Edge,
+  type NodeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useRouter } from "next/navigation";
@@ -116,6 +117,44 @@ function EditorCanvas({ mindMap }: Props) {
       nodes: state.nodes.map((n) => ({ ...n, selected: false })),
     }));
   }, []);
+
+  const handleNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      applyNodeChanges(changes);
+
+      const hasDimensions = changes.some((c) => c.type === "dimensions");
+      if (!hasDimensions) return;
+
+      const { nodes: latestNodes } = useMindMapStore.getState();
+      const needsLayout = latestNodes.some((n) => n.data?.needsLayout);
+      if (!needsLayout) return;
+
+      useMindMapStore.setState((state) => ({
+        nodes: state.nodes.map((n) =>
+          n.data?.needsLayout
+            ? { ...n, data: { ...n.data, needsLayout: false } }
+            : n,
+        ),
+      }));
+
+      requestAnimationFrame(() => {
+        const { nodes: freshNodes, edges: freshEdges } =
+          useMindMapStore.getState();
+        const cMap = buildChildrenMap(freshEdges);
+        const hidden = getHiddenNodeIds(freshNodes, cMap);
+        const positions = layoutForest(freshNodes, freshEdges, cMap, hidden);
+
+        useMindMapStore.setState((state) => ({
+          nodes: state.nodes.map((n) => {
+            if (n.data?.isOrphan) return n;
+            const pos = positions.get(n.id);
+            return pos ? { ...n, position: pos } : n;
+          }),
+        }));
+      });
+    },
+    [applyNodeChanges],
+  );
 
   const handleAddSibling = useCallback(
     (nodeId: string) => {
@@ -719,7 +758,7 @@ function EditorCanvas({ mindMap }: Props) {
           edges={displayEdges}
           edgeTypes={edgeTypes}
           defaultEdgeOptions={{ type: "custom" }}
-          onNodesChange={applyNodeChanges}
+          onNodesChange={handleNodesChange}
           onEdgesChange={applyEdgeChanges}
           onNodeDragStart={onNodeDragStart}
           onNodeDrag={onNodeDrag}

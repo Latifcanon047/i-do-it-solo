@@ -42,6 +42,8 @@ export const ICON_MAP: Record<string, LucideIcon> = {
   briefcase: Briefcase,
 };
 
+const THUMBNAIL_HEIGHT = 80;
+
 export default function MindMapNode({ id, data, selected }: NodeProps) {
   const { updateNodeData } = useReactFlow();
 
@@ -66,18 +68,39 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   const onAddSibling = data.onAddSibling as
     | ((nodeId: string) => void)
     | undefined;
+  const imageUrl = data.imageUrl as string | undefined;
 
-  // Min size berdasarkan level
   const minWidth = isRoot ? 160 : isDirectChildOfRoot ? 140 : 100;
   const minHeight = isRoot ? 48 : isDirectChildOfRoot ? 40 : 32;
+  const contentMinWidth =
+    minWidth - (isRoot ? 48 : isDirectChildOfRoot ? 32 : 24);
+  const contentMaxWidth = 300 - (isRoot ? 48 : isDirectChildOfRoot ? 32 : 24);
 
-  // Auto-resize textarea
-  function autoResize() {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${ta.scrollHeight}px`;
-  }
+  const fontClass = isRoot
+    ? "text-base font-semibold"
+    : isDirectChildOfRoot
+      ? "text-sm font-medium"
+      : "text-sm";
+
+  const paddingStyle = isRoot
+    ? { padding: "12px 24px" }
+    : isDirectChildOfRoot
+      ? { padding: "8px 16px" }
+      : { padding: "6px 12px" };
+
+  // Shared style — span dan textarea harus identik supaya ukuran gak loncat
+  const contentStyle: React.CSSProperties = {
+    minWidth: contentMinWidth,
+    maxWidth: contentMaxWidth,
+    fontFamily: "inherit",
+    letterSpacing: "inherit",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    textAlign: "center",
+    display: "block",
+    // line-height eksplisit supaya span == textarea
+    lineHeight: isRoot ? "1.5rem" : "1.25rem",
+  };
 
   useEffect(() => {
     if (data.editing) {
@@ -87,23 +110,35 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   }, [data.editing]);
 
   useEffect(() => {
-    if (editing) {
-      autoResize();
-      textareaRef.current?.select();
-    }
-  }, [editing]);
-
-  useEffect(() => {
     setLabel(data.label as string);
   }, [data.label]);
+
+  // Saat masuk edit mode: resize sesuai konten + select semua
+  useEffect(() => {
+    if (!editing) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    autoResize();
+    ta.select();
+  }, [editing]);
+
+  function autoResize() {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+  }
 
   function handleDoubleClick() {
     setEditing(true);
   }
 
   function handleBlur() {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
     setEditing(false);
-    updateNodeData(id, { label });
+    updateNodeData(id, { label, needsLayout: true });
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -175,11 +210,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
         minHeight,
         width: "max-content",
         maxWidth: 300,
-        padding: isRoot
-          ? "12px 24px"
-          : isDirectChildOfRoot
-            ? "8px 16px"
-            : "6px 12px",
+        ...paddingStyle,
       }}
       onDoubleClick={handleDoubleClick}
       onMouseEnter={() => setHovered(true)}
@@ -187,6 +218,22 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} isConnectable={false} />
 
+      {/* Thumbnail */}
+      {imageUrl && (
+        <div
+          className="w-full rounded-lg overflow-hidden mb-2"
+          style={{ height: THUMBNAIL_HEIGHT }}
+        >
+          <img
+            src={imageUrl}
+            alt=""
+            className="w-full h-full object-cover pointer-events-none"
+            draggable={false}
+          />
+        </div>
+      )}
+
+      {/* Content area */}
       <div className="flex items-center justify-center gap-1.5">
         {IconComponent && (
           <IconComponent
@@ -194,6 +241,8 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
             className="text-gray-700 shrink-0"
           />
         )}
+
+        {/* Span dan textarea bergantian di flow normal — tidak ada overlay */}
         {editing ? (
           <textarea
             ref={textareaRef}
@@ -206,29 +255,20 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
             onBlur={handleBlur}
             onKeyDown={handleKeyDown}
             rows={1}
-            className={`outline-none w-full text-center bg-transparent text-gray-800 font-medium resize-none overflow-hidden ${
-              isRoot
-                ? "text-base font-semibold"
-                : isDirectChildOfRoot
-                  ? "text-sm font-medium"
-                  : "text-sm"
-            }`}
+            className={`outline-none bg-transparent text-gray-800 font-medium resize-none overflow-hidden ${fontClass}`}
             style={{
-              minWidth:
-                minWidth - (isRoot ? 48 : isDirectChildOfRoot ? 32 : 24),
+              ...contentStyle,
+              padding: 0,
+              margin: 0,
+              border: "none",
             }}
           />
         ) : (
           <span
-            className={`text-gray-800 font-medium block break-words text-center ${
-              isRoot
-                ? "text-base font-semibold"
-                : isDirectChildOfRoot
-                  ? "text-sm font-medium"
-                  : "text-sm"
-            }`}
+            className={`text-gray-800 font-medium ${fontClass}`}
+            style={contentStyle}
           >
-            {label}
+            {label || "\u200B"}
           </span>
         )}
       </div>

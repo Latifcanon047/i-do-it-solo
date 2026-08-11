@@ -1,9 +1,9 @@
 import type { Node, Edge } from "@xyflow/react";
 
 // ===== CONSTANTS =====
-const LEVEL_SPACING = 220;
 const MIN_GAP = 80; // jarak minimum tepi kanan parent ke tepi kiri child
-export const SIBLING_SPACING = 90;
+const MIN_NODE_GAP = 20; // jarak minimum antar tepi bawah node atas ke tepi atas node bawah
+export const SIBLING_SPACING = 90; // fallback kalau node height kecil
 export const TREE_GAP = 150;
 
 // ===== TREE TRAVERSAL =====
@@ -82,14 +82,17 @@ export function layoutForest(
 
   let cursorY = 0;
 
+  // Kembalikan centerY node ini
+  // cursorY di-advance sesuai total tinggi subtree (termasuk node itu sendiri)
   function layoutNode(nodeId: string, parentId: string | null): number {
     const node = nodeMap.get(nodeId);
+    const nodeHeight = node?.measured?.height ?? 40;
 
     const children = (childrenMap.get(nodeId) || []).filter(
       (cid) => !hiddenNodeIds.has(cid),
     );
 
-    // Hitung X dulu sebelum rekursi
+    // Hitung X
     let x: number;
     if (parentId === null) {
       x = node?.position.x ?? 0;
@@ -100,21 +103,44 @@ export function layoutForest(
       x = parentPos.x + parentWidth + MIN_GAP;
     }
 
+    // Leaf node — advance cursorY sebesar tinggi node + gap
     if (children.length === 0) {
-      positions.set(nodeId, { x, y: cursorY });
-      cursorY += SIBLING_SPACING;
-      return cursorY - SIBLING_SPACING;
+      const y = cursorY + nodeHeight / 2;
+      positions.set(nodeId, { x, y });
+      cursorY += nodeHeight + MIN_NODE_GAP;
+      return y;
     }
 
-    // Set posisi sementara dulu dengan x yang sudah dihitung
-    // supaya child bisa baca parentPos waktu rekursi
+    // Node dengan children:
+    // 1. Catat posisi cursorY sebelum rekursi
+    // 2. Layout semua children (cursorY akan di-advance oleh rekursi)
+    // 3. Y parent = rata-rata center child pertama dan terakhir
+    // 4. Pastikan cursorY melewati bottom parent
+
+    const subtreeStart = cursorY; // posisi awal sebelum children di-layout
+
+    // Set posisi sementara supaya children bisa baca parentPos
     positions.set(nodeId, { x, y: 0 });
 
-    const childYs = children.map((cid) => layoutNode(cid, nodeId));
-    const y = (childYs[0] + childYs[childYs.length - 1]) / 2;
+    const childCenterYs = children.map((cid) => layoutNode(cid, nodeId));
 
-    // Update y setelah semua child selesai
+    // Y parent = rata-rata center child pertama dan terakhir
+    const y = (childCenterYs[0] + childCenterYs[childCenterYs.length - 1]) / 2;
     positions.set(nodeId, { x, y });
+
+    // cursorY harus melewati:
+    // (a) bottom dari node parent itu sendiri
+    const parentBottom = y + nodeHeight / 2 + MIN_NODE_GAP;
+    if (parentBottom > cursorY) {
+      cursorY = parentBottom;
+    }
+
+    // (b) subtreeStart + tinggi parent (kalau parent lebih tinggi dari subtree children)
+    const minCursorY = subtreeStart + nodeHeight + MIN_NODE_GAP;
+    if (minCursorY > cursorY) {
+      cursorY = minCursorY;
+    }
+
     return y;
   }
 
@@ -129,20 +155,20 @@ export function layoutForest(
 // ===== POSITION PRE-CALCULATION =====
 export function calcChildPosition(
   parent: Node,
-  siblings: string[], // existing children ids of parent
+  siblings: string[],
   nodes: Node[],
 ): { x: number; y: number } {
-  const x = parent.position.x + LEVEL_SPACING;
+  const x = parent.position.x + 220;
 
   if (siblings.length === 0) {
     return { x, y: parent.position.y };
   }
 
-  // Taruh di bawah sibling terakhir
   const lastSiblingId = siblings[siblings.length - 1];
   const lastSibling = nodes.find((n) => n.id === lastSiblingId);
+  const lastHeight = lastSibling?.measured?.height ?? 40;
   const y = lastSibling
-    ? lastSibling.position.y + SIBLING_SPACING
+    ? lastSibling.position.y + lastHeight + MIN_NODE_GAP
     : parent.position.y;
 
   return { x, y };
@@ -150,33 +176,32 @@ export function calcChildPosition(
 
 export function calcSiblingPosition(
   node: Node,
-  coSiblings: string[], // semua sibling ids (tidak termasuk node itu sendiri)
+  coSiblings: string[],
   nodes: Node[],
 ): { x: number; y: number } {
   const x = node.position.x;
 
   if (coSiblings.length === 0) {
-    return { x, y: node.position.y + SIBLING_SPACING };
+    const nodeHeight = node.measured?.height ?? 40;
+    return { x, y: node.position.y + nodeHeight + MIN_NODE_GAP };
   }
 
-  // Taruh di bawah sibling terakhir
   const lastSiblingId = coSiblings[coSiblings.length - 1];
   const lastSibling = nodes.find((n) => n.id === lastSiblingId);
+  const lastHeight = lastSibling?.measured?.height ?? 40;
   const y = lastSibling
-    ? lastSibling.position.y + SIBLING_SPACING
-    : node.position.y + SIBLING_SPACING;
+    ? lastSibling.position.y + lastHeight + MIN_NODE_GAP
+    : node.position.y + (node.measured?.height ?? 40) + MIN_NODE_GAP;
 
   return { x, y };
 }
 
-//ini boleh di harus belum kepake. tapi di pertahanin juga gak apa apa dulu
 export function rerootEdges(
   nodeId: string,
   targetId: string,
   edges: Edge[],
   parentMap: Map<string, string>,
 ): Edge[] {
-  // Susun jalur dari D naik ke atas sampai ketemu T (inclusive)
   const path: string[] = [nodeId];
   let current = parentMap.get(nodeId);
   while (current) {
@@ -185,12 +210,11 @@ export function rerootEdges(
     current = parentMap.get(current);
   }
 
-  const grandParent = parentMap.get(targetId); // parent-nya T (kalau ada)
+  const grandParent = parentMap.get(targetId);
 
-  // Edge lama di sepanjang chain yang mau dibalik
   const chainPairs = new Set<string>();
   for (let i = 0; i < path.length - 1; i++) {
-    chainPairs.add(`${path[i + 1]}>${path[i]}`); // parent->child asli
+    chainPairs.add(`${path[i + 1]}>${path[i]}`);
   }
 
   const filtered = edges.filter((e) => {
@@ -202,7 +226,6 @@ export function rerootEdges(
 
   const newEdges = [...filtered];
 
-  // Balik arah chain: D->p1->p2->...->T
   for (let i = 0; i < path.length - 1; i++) {
     newEdges.push({
       id: `e-${path[i]}-${path[i + 1]}`,
@@ -211,7 +234,6 @@ export function rerootEdges(
     });
   }
 
-  // Grandparent sekarang connect ke D, gantiin posisi T
   if (grandParent) {
     newEdges.push({
       id: `e-${grandParent}-${nodeId}`,
