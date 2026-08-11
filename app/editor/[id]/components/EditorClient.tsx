@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -72,7 +72,8 @@ function EditorCanvas({ mindMap }: Props) {
   const isFirstRender = useRef(true);
   const [stylePanelOpen, setStylePanelOpen] = useState(false);
   const selectedNode = nodes.find((n) => n.selected) ?? null;
-  const { fitView, setNodes, flowToScreenPosition } = useReactFlow();
+  const { fitView, setNodes, flowToScreenPosition, screenToFlowPosition } =
+    useReactFlow();
   const [dragDecision, setDragDecision] = useState<DragDecision | null>(null);
   const dragOriginRef = useRef<{
     id: string;
@@ -94,22 +95,60 @@ function EditorCanvas({ mindMap }: Props) {
   const commitDragDecision = useMindMapStore((s) => s.commitDragDecision);
   const orphanNode = useMindMapStore((s) => s.orphanNode);
   const { zoom } = useViewport();
-  console.log("render zoom:", zoom);
+  const handleAddChild = useCallback(
+    (nodeId: string) => {
+      const newId = addChild(nodeId);
+      if (newId) requestAnimationFrame(() => runLayout(newId));
+    },
+    [addChild],
+  );
+  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    useMindMapStore.setState((state) => ({
+      nodes: state.nodes.map((n) => ({
+        ...n,
+        selected: n.id === node.id,
+      })),
+    }));
+  }, []);
 
-  // save
+  const onPaneClick = useCallback(() => {
+    useMindMapStore.setState((state) => ({
+      nodes: state.nodes.map((n) => ({ ...n, selected: false })),
+    }));
+  }, []);
 
-  // Tambah helper ini
-  function runLayout() {
+  const handleAddSibling = useCallback(
+    (nodeId: string) => {
+      const newId = addSibling(nodeId);
+      if (newId) requestAnimationFrame(() => runLayout(newId));
+    },
+    [addSibling],
+  );
+
+  function runLayout(focusNodeId?: string) {
     const { nodes: latestNodes, edges: latestEdges } =
       useMindMapStore.getState();
     const cMap = buildChildrenMap(latestEdges);
     const hidden = getHiddenNodeIds(latestNodes, cMap);
     const positions = layoutForest(latestNodes, latestEdges, cMap, hidden);
-    setNodes((nds) =>
-      nds.map((n) =>
-        positions.has(n.id) ? { ...n, position: positions.get(n.id)! } : n,
-      ),
-    );
+
+    // Update posisi + selection langsung di store, bukan via setNodes
+    useMindMapStore.setState((state) => ({
+      nodes: state.nodes.map((n) => {
+        const pos = positions.get(n.id);
+        return {
+          ...n,
+          position: pos ?? n.position,
+          selected: focusNodeId ? n.id === focusNodeId : n.selected,
+        };
+      }),
+    }));
+
+    if (focusNodeId) {
+      requestAnimationFrame(() => {
+        fitView({ nodes: [{ id: focusNodeId }], duration: 300, maxZoom: zoom });
+      });
+    }
   }
 
   useEffect(() => {
@@ -180,20 +219,17 @@ function EditorCanvas({ mindMap }: Props) {
   useEffect(() => {
     const { nodes: latestNodes, edges: latestEdges } =
       useMindMapStore.getState();
-
     const cMap = buildChildrenMap(latestEdges);
-
     const hidden = getHiddenNodeIds(latestNodes, cMap);
     const positions = layoutForest(latestNodes, latestEdges, cMap, hidden);
 
-    setNodes((nds) =>
-      nds.map((n) => {
+    useMindMapStore.setState((state) => ({
+      nodes: state.nodes.map((n) => {
         if (n.data?.isOrphan) return n;
-        return positions.has(n.id)
-          ? { ...n, position: positions.get(n.id)! }
-          : n;
+        const pos = positions.get(n.id);
+        return pos ? { ...n, position: pos } : n;
       }),
-    );
+    }));
   }, [structureSignature]);
 
   function onNodeDragStart(_: MouseEvent | TouchEvent, node: Node) {
@@ -229,11 +265,26 @@ function EditorCanvas({ mindMap }: Props) {
       );
     }
 
+    // Konversi posisi mouse ke flow coordinates
+    const mouseFlowPos = screenToFlowPosition({ x: clientX, y: clientY });
+    const nodeWidth = node.measured?.width ?? 150;
+    const nodeHeight = node.measured?.height ?? 40;
+    const dragRect = {
+      x: mouseFlowPos.x - nodeWidth / 2,
+      y: mouseFlowPos.y - nodeHeight / 2,
+      width: nodeWidth,
+      height: nodeHeight,
+    };
     // ... sisa kode onNodeDrag yang sudah ada ...
     const candidates = nodes.filter(
       (n) => n.id !== node.id && !hiddenNodeIds.has(n.id),
     );
-    const hit = hitTestDrag(node, candidates, previousTargetRef.current);
+    const hit = hitTestDrag(
+      node,
+      candidates,
+      previousTargetRef.current,
+      dragRect,
+    );
     if (!hit) {
       previousTargetRef.current = null;
       setDragDecision(null);
@@ -473,11 +524,11 @@ function EditorCanvas({ mindMap }: Props) {
     const parentWidth = parentNode.measured?.width ?? 150;
     const parentHeight = parentNode.measured?.height ?? 40;
     const TOOLBAR_OFFSET = 44;
-    const GHOST_SCALE = 0.5;
+    const GHOST_SCALE = 0.7;
     const dragNode = nodes.find((n) => n.id === dragDecision.dragId);
     const GHOST_HEIGHT =
       (dragNode?.measured?.height ?? 32) * zoom * GHOST_SCALE;
-    const GHOST_GAP = 6 * zoom;
+    const GHOST_GAP = 9 * zoom;
 
     const parentRaw = flowToScreenPosition({
       x: parentNode.position.x + parentWidth,
@@ -513,7 +564,6 @@ function EditorCanvas({ mindMap }: Props) {
     const STUB = 20 * zoom;
     const SEGMENT = 9 * zoom;
     const stubX = x1 + STUB;
-
     const mx2 = x2 - SEGMENT;
     const dx = mx2 - stubX;
     const cx1 = stubX + dx / 2;
@@ -523,6 +573,11 @@ function EditorCanvas({ mindMap }: Props) {
 
     return `M${x1},${y1} L${stubX},${y1} C${cx1},${cy1} ${cx2},${cy2} ${mx2},${y2} L${x2},${y2}`;
   }, [dragDecision, ghostNode, nodes, flowToScreenPosition, zoom]);
+
+  const rootId = useMemo(
+    () => nodes.find((n) => n.data?.isRoot)?.id ?? null,
+    [nodes],
+  );
 
   const displayNodes = useMemo(() => {
     return nodes.map((n) => {
@@ -550,6 +605,9 @@ function EditorCanvas({ mindMap }: Props) {
           searchMatch: matchIds.includes(n.id),
           searchActive: n.id === activeMatchId,
           dropZone: previewZone,
+          isDirectChildOfRoot: rootId ? parentMap.get(n.id) === rootId : false,
+          onAddChild: handleAddChild,
+          onAddSibling: handleAddSibling,
         },
       };
     });
@@ -574,9 +632,9 @@ function EditorCanvas({ mindMap }: Props) {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
 
-      const selected = nodes.find((n) => n.selected);
-
       if (e.key === "Delete" || e.key === "Backspace") {
+        const { nodes: latestNodes } = useMindMapStore.getState(); // ← fresh
+        const selected = latestNodes.find((n) => n.selected) ?? null;
         if (!selected) return;
         e.preventDefault();
         if (selected.data?.isRoot) return;
@@ -584,23 +642,36 @@ function EditorCanvas({ mindMap }: Props) {
         return;
       }
 
-      if (e.key === "Tab") {
-        if (!selected) return;
+      if (e.key === "Enter") {
         e.preventDefault();
-        addChild(selected.id);
-        requestAnimationFrame(runLayout);
+        const { nodes: latestNodes } = useMindMapStore.getState();
+        const latestSelected = latestNodes.find((n) => n.selected);
+        if (!latestSelected) return;
+        const newId = latestSelected.data?.isRoot
+          ? addChild(latestSelected.id)
+          : addSibling(latestSelected.id);
+
+        requestAnimationFrame(() => {
+          const { nodes: afterNodes } = useMindMapStore.getState();
+          const afterSelected = afterNodes.find((n) => n.selected);
+          runLayout(newId ?? undefined);
+        });
         return;
       }
-
-      if (e.key === "Enter") {
-        if (!selected) return;
+      if (e.key === "Tab") {
         e.preventDefault();
-        addSibling(selected.id);
-        requestAnimationFrame(runLayout);
+        const { nodes: latestNodes } = useMindMapStore.getState(); // ← fresh
+        const latestSelected = latestNodes.find((n) => n.selected);
+        if (!latestSelected) return;
+        // Tab selalu addChild, termasuk root
+        const newId = addChild(latestSelected.id);
+        if (newId) requestAnimationFrame(() => runLayout(newId));
         return;
       }
 
       if (e.key === " ") {
+        const { nodes: latestNodes } = useMindMapStore.getState(); // ← fresh
+        const selected = latestNodes.find((n) => n.selected) ?? null;
         if (!selected) return;
         e.preventDefault();
         setNodes((nds) =>
@@ -616,7 +687,7 @@ function EditorCanvas({ mindMap }: Props) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [nodes, edges, searchOpen, addChild, addSibling, deleteSelected]);
+  }, [searchOpen, addChild, addSibling, deleteSelected]);
 
   return (
     <div className="w-screen h-screen flex flex-col">
@@ -662,6 +733,8 @@ function EditorCanvas({ mindMap }: Props) {
           zoomOnPinch={true}
           selectionOnDrag={false}
           panOnDrag={true}
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
         >
           {ghostNode &&
             dragDecision &&

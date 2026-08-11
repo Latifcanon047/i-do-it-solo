@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Handle, Position, useReactFlow, type NodeProps } from "@xyflow/react";
 import { Minus, Plus } from "lucide-react";
 import {
@@ -22,7 +22,6 @@ import {
   Briefcase,
   type LucideIcon,
 } from "lucide-react";
-import { useMindMapStore } from "@/store/mindMapStore";
 
 export const ICON_MAP: Record<string, LucideIcon> = {
   star: Star,
@@ -45,12 +44,11 @@ export const ICON_MAP: Record<string, LucideIcon> = {
 
 export default function MindMapNode({ id, data, selected }: NodeProps) {
   const { updateNodeData } = useReactFlow();
-  const addChild = useMindMapStore((s) => s.addChild);
-  const addSibling = useMindMapStore((s) => s.addSibling);
 
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(data.label as string);
   const [hovered, setHovered] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const bgColor = (data.bgColor as string) || "#FFFFFF";
   const borderColor = (data.borderColor as string) || "#D1D5DB";
@@ -63,6 +61,23 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   const searchActive = !!data.searchActive;
   const isRoot = !!data.isRoot;
   const isGhost = !!data.isGhost;
+  const isDirectChildOfRoot = !!data.isDirectChildOfRoot;
+  const onAddChild = data.onAddChild as ((nodeId: string) => void) | undefined;
+  const onAddSibling = data.onAddSibling as
+    | ((nodeId: string) => void)
+    | undefined;
+
+  // Min size berdasarkan level
+  const minWidth = isRoot ? 160 : isDirectChildOfRoot ? 140 : 100;
+  const minHeight = isRoot ? 48 : isDirectChildOfRoot ? 40 : 32;
+
+  // Auto-resize textarea
+  function autoResize() {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+  }
 
   useEffect(() => {
     if (data.editing) {
@@ -70,6 +85,17 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
       updateNodeData(id, { editing: false });
     }
   }, [data.editing]);
+
+  useEffect(() => {
+    if (editing) {
+      autoResize();
+      textareaRef.current?.select();
+    }
+  }, [editing]);
+
+  useEffect(() => {
+    setLabel(data.label as string);
+  }, [data.label]);
 
   function handleDoubleClick() {
     setEditing(true);
@@ -80,6 +106,14 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
     updateNodeData(id, { label });
   }
 
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleBlur();
+    }
+    // Shift+Enter → newline, biarkan default textarea
+  }
+
   function toggleCollapse(e: React.MouseEvent) {
     e.stopPropagation();
     updateNodeData(id, { collapsed: !collapsed });
@@ -87,12 +121,12 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
   function handleAddChild(e: React.MouseEvent) {
     e.stopPropagation();
-    addChild(id);
+    onAddChild?.(id);
   }
 
   function handleAddSibling(e: React.MouseEvent) {
     e.stopPropagation();
-    addSibling(id);
+    onAddSibling?.(id);
   }
 
   const dropZone = data.dropZone as
@@ -115,12 +149,14 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
             : searchMatch
               ? "ring-2 ring-yellow-400"
               : "";
+
   const edgeIndicatorClass =
     dropZone === "before"
       ? "border-t-4 border-t-blue-500"
       : dropZone === "after"
         ? "border-b-4 border-b-blue-500"
         : "";
+
   if (isGhost) {
     return (
       <div className="px-4 py-2 min-w-30 rounded-xl border-2 border-dashed border-pink-500 bg-pink-200 text-pink-700 text-sm font-medium text-center pointer-events-none select-none">
@@ -131,12 +167,20 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
   return (
     <div
-      className={`relative rounded-xl border-2 shadow-sm text-center cursor-pointer transition ${
-        isRoot
-          ? "px-6 py-4 min-w-40 border-[3px] shadow-md"
-          : "px-4 py-2 min-w-30"
-      } ${ringClass} ${edgeIndicatorClass}`}
-      style={{ backgroundColor: bgColor, borderColor: borderColor }}
+      className={`relative rounded-xl border-2 shadow-sm text-center cursor-pointer transition ${ringClass} ${edgeIndicatorClass}`}
+      style={{
+        backgroundColor: bgColor,
+        borderColor: borderColor,
+        minWidth,
+        minHeight,
+        width: "max-content",
+        maxWidth: 300,
+        padding: isRoot
+          ? "12px 24px"
+          : isDirectChildOfRoot
+            ? "8px 16px"
+            : "6px 12px",
+      }}
       onDoubleClick={handleDoubleClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -146,24 +190,43 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
       <div className="flex items-center justify-center gap-1.5">
         {IconComponent && (
           <IconComponent
-            size={isRoot ? 18 : 14}
+            size={isRoot ? 18 : isDirectChildOfRoot ? 16 : 14}
             className="text-gray-700 shrink-0"
           />
         )}
         {editing ? (
-          <input
+          <textarea
+            ref={textareaRef}
             autoFocus
             value={label}
-            onChange={(e) => setLabel(e.target.value)}
+            onChange={(e) => {
+              setLabel(e.target.value);
+              autoResize();
+            }}
             onBlur={handleBlur}
-            onKeyDown={(e) => e.key === "Enter" && handleBlur()}
-            className={`outline-none w-full text-center bg-transparent text-gray-800 font-medium ${
-              isRoot ? "text-base font-semibold" : "text-sm"
+            onKeyDown={handleKeyDown}
+            rows={1}
+            className={`outline-none w-full text-center bg-transparent text-gray-800 font-medium resize-none overflow-hidden ${
+              isRoot
+                ? "text-base font-semibold"
+                : isDirectChildOfRoot
+                  ? "text-sm font-medium"
+                  : "text-sm"
             }`}
+            style={{
+              minWidth:
+                minWidth - (isRoot ? 48 : isDirectChildOfRoot ? 32 : 24),
+            }}
           />
         ) : (
           <span
-            className={`text-gray-800 font-medium ${isRoot ? "text-base font-semibold" : "text-sm"}`}
+            className={`text-gray-800 font-medium block break-words text-center ${
+              isRoot
+                ? "text-base font-semibold"
+                : isDirectChildOfRoot
+                  ? "text-sm font-medium"
+                  : "text-sm"
+            }`}
           >
             {label}
           </span>
@@ -171,7 +234,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
       </div>
 
       <Handle type="source" position={Position.Right} isConnectable={false} />
-      {/* Tombol collapse/expand */}
+
       {hasChildren && (hovered || collapsed) && (
         <button
           onClick={toggleCollapse}
@@ -183,24 +246,22 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
         </button>
       )}
 
-      {/* Tombol + kanan → tambah child (sama seperti Tab) */}
-      {hovered && !collapsed && (
+      {selected && !collapsed && (
         <button
           onClick={handleAddChild}
           onMouseDown={(e) => e.stopPropagation()}
-          className="absolute -right-2 -top-2 w-5 h-5 rounded-full bg-blue-500 border border-blue-600 shadow flex items-center justify-center text-white hover:bg-blue-600 z-10"
+          className="absolute -right-6 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-blue-500 border border-blue-600 shadow flex items-center justify-center text-white hover:bg-blue-600 z-10"
           title="Tambah child node (Tab)"
         >
           <Plus size={10} />
         </button>
       )}
 
-      {/* Tombol + bawah → tambah sibling (sama seperti Enter), tidak muncul di root */}
-      {hovered && !isRoot && (
+      {selected && !isRoot && (
         <button
           onClick={handleAddSibling}
           onMouseDown={(e) => e.stopPropagation()}
-          className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-blue-500 border border-blue-600 shadow flex items-center justify-center text-white hover:bg-blue-600 z-10"
+          className="absolute -bottom-6 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-blue-500 border border-blue-600 shadow flex items-center justify-center text-white hover:bg-blue-600 z-10"
           title="Tambah sibling node (Enter)"
         >
           <Plus size={10} />

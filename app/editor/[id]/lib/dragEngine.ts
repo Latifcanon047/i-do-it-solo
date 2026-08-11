@@ -69,11 +69,11 @@ export function hitTestDrag(
   draggedNode: Node,
   candidateNodes: Node[],
   previousTargetId: string | null = null,
+  dragRect?: { x: number; y: number; width: number; height: number },
 ): HitTestResult | null {
   if (candidateNodes.length === 0) return null;
 
-  const draggedVisual = getVisualRect(draggedNode);
-
+  const draggedVisual = dragRect ?? getVisualRect(draggedNode);
   let best: Node | null = null;
   let bestArea = 0;
 
@@ -167,7 +167,7 @@ export function decideDragAction(
     return { type: "BLOCK", dragId, targetId, reason: "root-cannot-move" };
   }
   const targetNode = nodes.find((n) => n.id === targetId);
-  if (targetNode?.data?.isRoot) {
+  if (targetNode?.data?.isRoot && zone !== "center") {
     return { type: "BLOCK", dragId, targetId, reason: "root-cannot-be-target" };
   }
 

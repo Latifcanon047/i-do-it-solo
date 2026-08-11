@@ -20,6 +20,7 @@ interface MindMapStore {
   edges: Edge[];
   saveStatus: SaveStatus;
 
+  setSelectedNode: (nodeId: string) => void;
   init: (id: string, title: string, nodes: Node[], edges: Edge[]) => void;
   applyNodeChanges: (changes: NodeChange[]) => void;
   applyEdgeChanges: (changes: EdgeChange[]) => void;
@@ -43,13 +44,14 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     set({ mindMapId: id, mindMapTitle: title, nodes, edges });
   },
 
+  // mindMapStore.ts
   applyNodeChanges: (changes) => {
     const { nodes } = get();
     const rootIds = new Set(
       nodes.filter((n) => !!n.data?.isRoot).map((n) => n.id),
     );
     const safeChanges = changes.filter(
-      (c) => !(c.type === "remove" && rootIds.has(c.id)),
+      (c) => !(c.type === "remove" && rootIds.has(c.id)) && c.type !== "select",
     );
     set((state) => ({
       nodes: applyNodeChanges(safeChanges, state.nodes),
@@ -67,12 +69,18 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const parent = nodes.find((n) => n.id === parentId);
     if (!parent) return null;
 
+    const siblingCount = edges.filter((e) => e.source === parentId).length;
+    const n = siblingCount + 1;
+
+    const isParentRoot = !!parent.data?.isRoot;
+    const label = isParentRoot ? `Main Topic ${n}` : `Subtopic ${n}`;
+
     const id = crypto.randomUUID();
     const newNode: Node = {
       id,
       type: "mindmap",
       position: { x: parent.position.x, y: parent.position.y },
-      data: { label: "New Node", editing: true },
+      data: { label },
       selected: true,
     };
     const newEdge: Edge = {
@@ -99,17 +107,26 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       return get().addChild(nodeId);
     }
 
+    const parentId = parentEdge.source;
+    const parent = nodes.find((n) => n.id === parentId);
+
+    const siblingCount = edges.filter((e) => e.source === parentId).length;
+    const n = siblingCount + 1;
+
+    const isParentRoot = !!parent?.data?.isRoot;
+    const label = isParentRoot ? `Main Topic ${n}` : `Subtopic ${n}`;
+
     const id = crypto.randomUUID();
     const newNode: Node = {
       id,
       type: "mindmap",
       position: { x: selected.position.x, y: selected.position.y },
-      data: { label: "New Node", editing: true },
+      data: { label },
       selected: true,
     };
     const newEdge: Edge = {
-      id: `e-${parentEdge.source}-${id}`,
-      source: parentEdge.source,
+      id: `e-${parentId}-${id}`,
+      source: parentId,
       target: id,
     };
 
@@ -134,24 +151,28 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
   deleteSelected: () => {
     set((state) => {
       const toDelete = state.nodes.filter((n) => n.selected && !n.data?.isRoot);
+      const childrenMap = buildChildrenMap(state.edges);
       const deletedIds = new Set(toDelete.map((n) => n.id));
+      for (const node of toDelete) {
+        const stack = [...(childrenMap.get(node.id) ?? [])];
+        while (stack.length > 0) {
+          const id = stack.pop()!;
+          deletedIds.add(id);
+          stack.push(...(childrenMap.get(id) ?? []));
+        }
+      }
 
-      // Cari parent dan sibling dari node yang dihapus
       const focusIds = new Set<string>();
       for (const node of toDelete) {
         const parentEdge = state.edges.find((e) => e.target === node.id);
         if (!parentEdge) continue;
 
         const parentId = parentEdge.source;
-
-        // Sibling = children parent yang bukan node yang dihapus
         const siblings = state.edges
           .filter((e) => e.source === parentId && !deletedIds.has(e.target))
           .map((e) => e.target);
 
         if (siblings.length > 0) {
-          // Fokus ke sibling terdekat — ambil yang terakhir sebelum node ini
-          // atau yang pertama sesudahnya
           const allChildren = state.edges
             .filter((e) => e.source === parentId)
             .map((e) => e.target);
@@ -165,7 +186,6 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
           const target = before[before.length - 1] ?? after[0];
           if (target) focusIds.add(target);
         } else {
-          // Tidak ada sibling → fokus ke parent
           focusIds.add(parentId);
         }
       }
@@ -183,6 +203,15 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         ),
       };
     });
+  },
+
+  setSelectedNode: (nodeId: string) => {
+    set((state) => ({
+      nodes: state.nodes.map((n) => ({
+        ...n,
+        selected: n.id === nodeId,
+      })),
+    }));
   },
 
   updateNodeStyle: (nodeId, style) => {
@@ -227,7 +256,6 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         };
       }
 
-      // REORDER_BEFORE / REORDER_AFTER
       const filtered = state.edges.filter((e) => e.target !== decision.dragId);
 
       if (!decision.newParentId) {

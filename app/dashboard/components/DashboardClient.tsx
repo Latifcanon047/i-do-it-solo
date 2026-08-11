@@ -32,7 +32,7 @@ export default function DashboardClient({ mindMaps, user }: Props) {
     const res = await fetch("/api/mindmaps", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "Untitled Mind Map" }),
+      body: JSON.stringify({ title: "Central Topic" }),
     });
     const data = await res.json();
     setLoading(false);
