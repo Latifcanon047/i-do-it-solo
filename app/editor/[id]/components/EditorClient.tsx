@@ -10,11 +10,13 @@ import {
   useReactFlow,
   PanOnScrollMode,
   useViewport,
+  ControlButton,
   type Node,
   type Edge,
   type NodeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { ChevronDown, ChevronUp, Map as MapIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import MindMapNode from "./MindMapNode";
 import EditorToolbar from "./EditorToolbar";
@@ -90,12 +92,16 @@ function EditorCanvas({ mindMap }: Props) {
     bgColor: string;
     borderColor: string;
     isRoot: boolean;
+    measuredWidth: number;
+    measuredHeight: number;
   } | null>(null);
   // Fase 2 — Hysteresis: simpan target aktif dari frame sebelumnya
   const previousTargetRef = useRef<string | null>(null);
   const commitDragDecision = useMindMapStore((s) => s.commitDragDecision);
   const orphanNode = useMindMapStore((s) => s.orphanNode);
   const { zoom } = useViewport();
+  const [miniMapOpen, setMiniMapOpen] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
   const handleAddChild = useCallback(
     (nodeId: string) => {
       const newId = addChild(nodeId);
@@ -122,16 +128,24 @@ function EditorCanvas({ mindMap }: Props) {
     (changes: NodeChange[]) => {
       applyNodeChanges(changes);
 
-      const hasDimensions = changes.some((c) => c.type === "dimensions");
-      if (!hasDimensions) return;
+      // Cuma track node yang dimensinya BENERAN berubah di batch ini —
+      // bukan semua node yang needsLayout secara global. Ini penting karena
+      // resize node (misal paste teks multiline panjang) bisa trigger
+      // beberapa event dimension berturut-turut sebelum settle ke ukuran final.
+      const dimensionChangedIds = new Set(
+        changes.filter((c) => c.type === "dimensions").map((c) => c.id),
+      );
+      if (dimensionChangedIds.size === 0) return;
 
       const { nodes: latestNodes } = useMindMapStore.getState();
-      const needsLayout = latestNodes.some((n) => n.data?.needsLayout);
-      if (!needsLayout) return;
+      const relevantNeedsLayout = latestNodes.some(
+        (n) => dimensionChangedIds.has(n.id) && n.data?.needsLayout,
+      );
+      if (!relevantNeedsLayout) return;
 
       useMindMapStore.setState((state) => ({
         nodes: state.nodes.map((n) =>
-          n.data?.needsLayout
+          dimensionChangedIds.has(n.id) && n.data?.needsLayout
             ? { ...n, data: { ...n.data, needsLayout: false } }
             : n,
         ),
@@ -146,7 +160,6 @@ function EditorCanvas({ mindMap }: Props) {
 
         useMindMapStore.setState((state) => ({
           nodes: state.nodes.map((n) => {
-            if (n.data?.isOrphan) return n;
             const pos = positions.get(n.id);
             return pos ? { ...n, position: pos } : n;
           }),
@@ -264,7 +277,6 @@ function EditorCanvas({ mindMap }: Props) {
 
     useMindMapStore.setState((state) => ({
       nodes: state.nodes.map((n) => {
-        if (n.data?.isOrphan) return n;
         const pos = positions.get(n.id);
         return pos ? { ...n, position: pos } : n;
       }),
@@ -283,6 +295,8 @@ function EditorCanvas({ mindMap }: Props) {
       bgColor: (node.data.bgColor as string) || "#FFFFFF",
       borderColor: (node.data.borderColor as string) || "#D1D5DB",
       isRoot: !!node.data.isRoot,
+      measuredWidth: node.measured?.width ?? 150,
+      measuredHeight: node.measured?.height ?? 40,
     });
   }
 
@@ -372,18 +386,34 @@ function EditorCanvas({ mindMap }: Props) {
       );
       return;
     } else if (decision) {
-      // Hapus isOrphan flag sebelum commit
-      setNodes((nds) =>
-        nds.map((n) =>
+      // Hapus isOrphan flag sebelum commit — HARUS lewat Zustand store
+      useMindMapStore.setState((state) => ({
+        nodes: state.nodes.map((n) =>
           n.id === decision.dragId
             ? { ...n, data: { ...n.data, isOrphan: false } }
             : n,
         ),
-      );
+      }));
       commitDragDecision(decision);
     } else {
-      orphanNode(node.id);
-      return;
+      // Node di-drag tapi gak nge-hit target manapun.
+      if (node.data?.isOrphan) {
+        // Udah orphan sebelumnya, cuma digeser-geser — update anchor-nya
+        // biar posisi baru gak ke-reset balik pas relayout, LALU lanjut relayout
+        // children-nya biar ikut ngikutin posisi baru.
+        useMindMapStore.setState((state) => ({
+          nodes: state.nodes.map((n) =>
+            n.id === node.id
+              ? { ...n, data: { ...n.data, orphanAnchorY: node.position.y } }
+              : n,
+          ),
+        }));
+      } else {
+        // Belum orphan — jadiin orphan baru, gak perlu layout tambahan
+        // karena orphanNode() sendiri gak nambah/ubah children.
+        orphanNode(node.id);
+        return;
+      }
     }
 
     const { nodes: latestNodes, edges: latestEdges } =
@@ -391,11 +421,12 @@ function EditorCanvas({ mindMap }: Props) {
     const cMap = buildChildrenMap(latestEdges);
     const hidden = getHiddenNodeIds(latestNodes, cMap);
     const positions = layoutForest(latestNodes, latestEdges, cMap, hidden);
-    setNodes((nds) =>
-      nds.map((n) =>
+
+    useMindMapStore.setState((state) => ({
+      nodes: state.nodes.map((n) =>
         positions.has(n.id) ? { ...n, position: positions.get(n.id)! } : n,
       ),
-    );
+    }));
   }
 
   // ===== SEARCH =====
@@ -563,10 +594,8 @@ function EditorCanvas({ mindMap }: Props) {
     const parentWidth = parentNode.measured?.width ?? 150;
     const parentHeight = parentNode.measured?.height ?? 40;
     const TOOLBAR_OFFSET = 44;
-    const GHOST_SCALE = 0.7;
-    const dragNode = nodes.find((n) => n.id === dragDecision.dragId);
-    const GHOST_HEIGHT =
-      (dragNode?.measured?.height ?? 32) * zoom * GHOST_SCALE;
+    const GHOST_W = 60;
+    const GHOST_H = 20;
     const GHOST_GAP = 9 * zoom;
 
     const parentRaw = flowToScreenPosition({
@@ -590,7 +619,7 @@ function EditorCanvas({ mindMap }: Props) {
       ghostTop = pos.y - TOOLBAR_OFFSET;
       ghostLeft = pos.x;
     } else if (dragDecision.type === "REORDER_BEFORE") {
-      ghostTop = targetPos.y - GHOST_GAP - GHOST_HEIGHT - TOOLBAR_OFFSET;
+      ghostTop = targetPos.y - GHOST_GAP - GHOST_H - TOOLBAR_OFFSET;
       ghostLeft = targetPos.x;
     } else {
       ghostTop = targetPos.y + targetHeight + GHOST_GAP - TOOLBAR_OFFSET;
@@ -598,7 +627,7 @@ function EditorCanvas({ mindMap }: Props) {
     }
 
     const x2 = ghostLeft;
-    const y2 = ghostTop + GHOST_HEIGHT / 2;
+    const y2 = ghostTop + GHOST_H / 2;
 
     const STUB = 20 * zoom;
     const SEGMENT = 9 * zoom;
@@ -722,6 +751,57 @@ function EditorCanvas({ mindMap }: Props) {
         );
         return;
       }
+
+      if (
+        e.key === "ArrowLeft" ||
+        e.key === "ArrowRight" ||
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown"
+      ) {
+        const { nodes: latestNodes, edges: latestEdges } =
+          useMindMapStore.getState();
+        const selected = latestNodes.find((n) => n.selected);
+        if (!selected) return;
+        e.preventDefault();
+
+        const pMap = buildParentMap(latestEdges);
+        const cMap = buildChildrenMap(latestEdges);
+
+        let targetId: string | null = null;
+
+        if (e.key === "ArrowLeft") {
+          if (selected.data?.isRoot) return;
+          targetId = pMap.get(selected.id) ?? null;
+        } else if (e.key === "ArrowRight") {
+          const children = cMap.get(selected.id) ?? [];
+          targetId = children[0] ?? null;
+        } else {
+          // ArrowUp / ArrowDown
+          const parentId = pMap.get(selected.id);
+          if (!parentId) return; // root, skip
+          const siblings = cMap.get(parentId) ?? [];
+          const idx = siblings.indexOf(selected.id);
+          if (e.key === "ArrowUp") {
+            targetId = idx > 0 ? siblings[idx - 1] : null;
+          } else {
+            targetId = idx < siblings.length - 1 ? siblings[idx + 1] : null;
+          }
+        }
+
+        if (!targetId) return;
+
+        useMindMapStore.setState((state) => ({
+          nodes: state.nodes.map((n) => ({
+            ...n,
+            selected: n.id === targetId,
+          })),
+        }));
+
+        requestAnimationFrame(() => {
+          fitView({ nodes: [{ id: targetId! }], duration: 300, maxZoom: zoom });
+        });
+        return;
+      }
     }
 
     window.addEventListener("keydown", handleKeyDown);
@@ -766,33 +846,36 @@ function EditorCanvas({ mindMap }: Props) {
           nodeTypes={nodeTypes}
           fitView
           deleteKeyCode={null}
+          panOnDrag={true}
           panOnScroll={true}
           panOnScrollMode={PanOnScrollMode.Free}
           zoomOnScroll={false}
           zoomOnPinch={true}
           selectionOnDrag={false}
-          panOnDrag={true}
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
+          translateExtent={[
+            [-2000, -2000],
+            [12000, 10000],
+          ]}
+          minZoom={0.25}
         >
+          {/* ghost node */}
           {ghostNode &&
             dragDecision &&
             dragDecision.type !== "BLOCK" &&
             (() => {
+              const GHOST_W = 60;
+              const GHOST_H = 20;
+              const GHOST_GAP = 9 * zoom;
+
               const targetNode = nodes.find(
                 (n) => n.id === dragDecision.targetId,
               );
-              const dragNode = nodes.find((n) => n.id === dragDecision.dragId);
               const targetPos = flowToScreenPosition(
                 targetNode?.position ?? { x: 0, y: 0 },
               );
-              const GHOST_SCALE = 0.7;
-              const ghostHeight =
-                (dragNode?.measured?.height ?? 32) * zoom * GHOST_SCALE;
-              const ghostWidth =
-                (dragNode?.measured?.width ?? 80) * zoom * GHOST_SCALE;
               const targetHeight = (targetNode?.measured?.height ?? 40) * zoom;
-              const GHOST_GAP = 9 * zoom;
 
               let top: number;
               let left: number = targetPos.x;
@@ -802,7 +885,7 @@ function EditorCanvas({ mindMap }: Props) {
                 top = pos.y - 44;
                 left = pos.x;
               } else if (dragDecision.type === "REORDER_BEFORE") {
-                top = targetPos.y - GHOST_GAP - ghostHeight - 44;
+                top = targetPos.y - GHOST_GAP - GHOST_H - 44;
               } else {
                 top = targetPos.y + targetHeight + GHOST_GAP - 44;
               }
@@ -810,37 +893,150 @@ function EditorCanvas({ mindMap }: Props) {
               return (
                 <div
                   className="absolute pointer-events-none z-50 rounded-md bg-blue-500 opacity-60"
-                  style={{
-                    left,
-                    top,
-                    width: ghostWidth,
-                    height: ghostHeight,
-                  }}
+                  style={{ left, top, width: GHOST_W, height: GHOST_H }}
                 />
               );
-            })()}{" "}
+            })()}
+          {/* drag shadow */}
           {draggingNodeId && mouseScreenPos && draggingNodeData && (
             <div
-              className="absolute pointer-events-none z-50 rounded-xl border-2 shadow-sm text-center px-4 py-2 min-w-30"
+              className="absolute pointer-events-none z-50 overflow-hidden rounded-md border-2 shadow-sm"
               style={{
                 left: mouseScreenPos.x,
                 top: mouseScreenPos.y - 44,
-                transform: `translate(-50%, -50%) scale(${zoom})`,
-                transformOrigin: "center center",
+                width: draggingNodeData.measuredWidth * zoom,
+                height: draggingNodeData.measuredHeight * zoom,
+                transform: `translate(-50%, -50%)`,
                 backgroundColor: draggingNodeData.bgColor,
                 borderColor: draggingNodeData.borderColor,
                 opacity: 0.8,
               }}
             >
-              <span className="text-gray-800 font-medium text-sm">
-                {draggingNodeData.label}
-              </span>
+              <div
+                style={{
+                  width: draggingNodeData.measuredWidth,
+                  height: draggingNodeData.measuredHeight,
+                  transform: `scale(${zoom})`,
+                  transformOrigin: "top left",
+                }}
+                className="flex items-center justify-center text-center px-4 py-2"
+              >
+                <span
+                  className="text-gray-800 font-medium text-sm"
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    maxWidth: draggingNodeData.measuredWidth - 32,
+                  }}
+                >
+                  {draggingNodeData.label}
+                </span>
+              </div>
             </div>
           )}
           <Background />
-          <Controls />
-          <MiniMap />
+          <div className="absolute bottom-4 left-4 z-50">
+            {!controlsOpen ? (
+              /* =========================
+       CONTROLS CLOSED
+       ========================= */
+              <button
+                onClick={() => setControlsOpen(true)}
+                title="Show controls"
+                className="
+        flex h-7 w-7
+        items-center justify-center
+        rounded-full
+        border border-slate-600
+        bg-slate-900
+        text-slate-200
+        shadow-xl
+        transition-all
+        duration-200
+        hover:bg-slate-800
+        hover:text-white
+        active:scale-95
+      "
+              >
+                <ChevronUp size={19} strokeWidth={2.5} />
+              </button>
+            ) : (
+              /* =========================
+       CONTROLS OPEN
+       ========================= */
+              <Controls
+                className="
+        controls-custom
+        !static
+        !m-0
+        !overflow-hidden
+        !rounded-full
+        !border
+        !border-slate-600
+        !bg-slate-900
+        !shadow-xl
+      "
+              >
+                {/* =========================
+          MINIMAP
+          ========================= */}
+                <ControlButton
+                  onClick={() => setMiniMapOpen((v) => !v)}
+                  title="Toggle MiniMap"
+                  className="
+          !border-0
+          !bg-slate-900
+          !text-slate-300
+          hover:!bg-slate-800
+          hover:!text-white
+          transition-colors
+        "
+                >
+                  <MapIcon size={15} strokeWidth={2} />
+                </ControlButton>
+
+                {/* =========================
+          CLOSE CONTROLS
+          ========================= */}
+                <ControlButton
+                  onClick={() => setControlsOpen(false)}
+                  title="Hide controls"
+                  className="
+          !border-0
+          !bg-slate-900
+          !text-slate-300
+          hover:!bg-slate-800
+          hover:!text-white
+          transition-colors
+        "
+                >
+                  <ChevronDown size={17} strokeWidth={2.5} />
+                </ControlButton>
+              </Controls>
+            )}
+          </div>
+          {miniMapOpen && (
+            <MiniMap
+              zoomable
+              pannable
+              nodeStrokeWidth={3}
+              style={{
+                width: 180,
+                height: 120,
+                backgroundColor: "#1a1a2e",
+                border: "1px solid #334155",
+                borderRadius: "8px",
+              }}
+              nodeColor={(n) => {
+                if (n.data?.isRoot) return "#f59e0b";
+                if (n.data?.bgColor) return n.data.bgColor as string;
+                return "#ffffff";
+              }}
+              maskColor="rgba(0,0,0,0.4)"
+            />
+          )}{" "}
         </ReactFlow>
+
         {ghostEdgePath && (
           <svg
             className="absolute inset-0 w-full h-full pointer-events-none z-40"
@@ -855,6 +1051,7 @@ function EditorCanvas({ mindMap }: Props) {
             />
           </svg>
         )}
+
         {stylePanelOpen && (
           <StyleSidebar
             selectedNode={selectedNode}

@@ -174,8 +174,9 @@ export function decideDragAction(
   const childrenMap = buildChildrenMap(edges);
   const descendants = getDescendants(dragId, childrenMap);
 
-  // Cycle hanya mungkin terjadi kalau REPARENT
-  if (zone === "center" && descendants.includes(targetId)) {
+  // Cycle bisa terjadi di REPARENT (target = descendant)
+  // MAUPUN reorder (target ITU SENDIRI adalah descendant dragId)
+  if (descendants.includes(targetId)) {
     return { type: "BLOCK", dragId, targetId, reason: "cycle-descendant" };
   }
 
@@ -185,6 +186,11 @@ export function decideDragAction(
 
   const parentMap = buildParentMap(edges);
   const newParentId = parentMap.get(targetId) ?? null;
+
+  // Target tanpa parent (orphan/root) gak bisa jadi target reorder sibling
+  if (!newParentId) {
+    return { type: "BLOCK", dragId, targetId, reason: "target-has-no-parent" };
+  }
 
   if (zone === "before") {
     return { type: "REORDER_BEFORE", dragId, targetId, newParentId };

@@ -1,12 +1,10 @@
 import type { Node, Edge } from "@xyflow/react";
 
-// ===== CONSTANTS =====
-const MIN_GAP = 80; // jarak minimum tepi kanan parent ke tepi kiri child
-const MIN_NODE_GAP = 20; // jarak minimum antar tepi bawah node atas ke tepi atas node bawah
+const MIN_GAP = 80;
+const MIN_NODE_GAP = 20; //
 export const SIBLING_SPACING = 90; // fallback kalau node height kecil
 export const TREE_GAP = 150;
 
-// ===== TREE TRAVERSAL =====
 export function buildChildrenMap(edges: Edge[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
   edges.forEach((e) => {
@@ -65,6 +63,8 @@ export function getHiddenNodeIds(
 }
 
 // ===== LAYOUT =====
+// layout.ts — ganti SELURUH fungsi layoutForest
+
 export function layoutForest(
   nodes: Node[],
   edges: Edge[],
@@ -76,15 +76,35 @@ export function layoutForest(
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
 
   const roots = nodes.filter(
-    (n) => !parentTargets.has(n.id) && !hiddenNodeIds.has(n.id),
+    (n) =>
+      !parentTargets.has(n.id) && !hiddenNodeIds.has(n.id) && !n.data?.isOrphan,
   );
   roots.sort((a, b) => (b.data?.isRoot ? 1 : 0) - (a.data?.isRoot ? 1 : 0));
 
   let cursorY = 0;
 
-  // Kembalikan centerY node ini
-  // cursorY di-advance sesuai total tinggi subtree (termasuk node itu sendiri)
-  function layoutNode(nodeId: string, parentId: string | null): number {
+  // Geser posisi Y satu subtree (node + semua descendant) sejumlah delta.
+  // Dipakai saat parent perlu digeser turun karena dia lebih tinggi
+  // daripada span children-nya — supaya parent tetap center, bukan cuma "nunduk".
+  function shiftSubtreeY(nodeId: string, delta: number) {
+    const pos = positions.get(nodeId);
+    if (pos) positions.set(nodeId, { x: pos.x, y: pos.y + delta });
+    const kids = (childrenMap.get(nodeId) || []).filter(
+      (cid) => !hiddenNodeIds.has(cid),
+    );
+    for (const kid of kids) {
+      shiftSubtreeY(kid, delta);
+    }
+  }
+
+  // Return: { centerY, subtreeBottom }
+  // centerY   = posisi Y tengah node ini (untuk di-set ke positions)
+  // subtreeBottom = batas bawah seluruh subtree node ini (cursorY setelah selesai)
+  function layoutNode(
+    nodeId: string,
+    parentId: string | null,
+  ): { centerY: number; subtreeBottom: number } {
+    const startY = cursorY; // batas atas yang tersedia untuk node ini + subtree-nya
     const node = nodeMap.get(nodeId);
     const nodeHeight = node?.measured?.height ?? 40;
 
@@ -103,50 +123,72 @@ export function layoutForest(
       x = parentPos.x + parentWidth + MIN_GAP;
     }
 
-    // Leaf node — advance cursorY sebesar tinggi node + gap
+    // === LEAF NODE ===
     if (children.length === 0) {
-      const y = cursorY + nodeHeight / 2;
-      positions.set(nodeId, { x, y });
+      const centerY = cursorY + nodeHeight / 2;
+      positions.set(nodeId, { x, y: centerY - nodeHeight / 2 });
       cursorY += nodeHeight + MIN_NODE_GAP;
-      return y;
+      return { centerY, subtreeBottom: cursorY };
     }
 
-    // Node dengan children:
-    // 1. Catat posisi cursorY sebelum rekursi
-    // 2. Layout semua children (cursorY akan di-advance oleh rekursi)
-    // 3. Y parent = rata-rata center child pertama dan terakhir
-    // 4. Pastikan cursorY melewati bottom parent
-
-    const subtreeStart = cursorY; // posisi awal sebelum children di-layout
-
-    // Set posisi sementara supaya children bisa baca parentPos
+    // === NODE DENGAN CHILDREN ===
+    // Set posisi sementara supaya children bisa baca parentPos.x
     positions.set(nodeId, { x, y: 0 });
 
-    const childCenterYs = children.map((cid) => layoutNode(cid, nodeId));
+    // Layout semua children, kumpulkan centerY dan subtreeBottom masing-masing
+    const childResults = children.map((cid) => layoutNode(cid, nodeId));
 
-    // Y parent = rata-rata center child pertama dan terakhir
-    const y = (childCenterYs[0] + childCenterYs[childCenterYs.length - 1]) / 2;
-    positions.set(nodeId, { x, y });
+    // centerY parent = rata-rata center child pertama dan terakhir
+    // centerY parent = rata-rata center child pertama dan terakhir
+    let centerY =
+      (childResults[0].centerY +
+        childResults[childResults.length - 1].centerY) /
+      2;
 
-    // cursorY harus melewati:
-    // (a) bottom dari node parent itu sendiri
-    const parentBottom = y + nodeHeight / 2 + MIN_NODE_GAP;
-    if (parentBottom > cursorY) {
-      cursorY = parentBottom;
+    // Kalau parent lebih tinggi dari span children-nya, dia bakal nembus
+    // ke atas nabrak sibling sebelumnya. Geser SELURUH subtree children
+    // turun sejumlah delta, supaya parent tetap center relatif ke children,
+    // bukan cuma dipaksa turun sendirian.
+    const minCenterY = startY + nodeHeight / 2;
+    if (centerY < minCenterY) {
+      const delta = minCenterY - centerY;
+      centerY = minCenterY;
+      for (const cid of children) {
+        shiftSubtreeY(cid, delta);
+      }
+      cursorY += delta;
     }
 
-    // (b) subtreeStart + tinggi parent (kalau parent lebih tinggi dari subtree children)
-    const minCursorY = subtreeStart + nodeHeight + MIN_NODE_GAP;
-    if (minCursorY > cursorY) {
-      cursorY = minCursorY;
-    }
+    positions.set(nodeId, { x, y: centerY - nodeHeight / 2 });
 
-    return y;
+    // subtreeBottom = max dari:
+    // (a) subtreeBottom child terakhir (sudah di-advance cursorY oleh rekursi)
+    // (b) bottom dari node parent itu sendiri (kalau parent lebih tinggi dari span children)
+    const parentBottom = centerY + nodeHeight / 2 + MIN_NODE_GAP;
+    const subtreeBottom = Math.max(cursorY, parentBottom);
+
+    // Update cursorY ke subtreeBottom supaya sibling berikutnya mulai dari sini
+    cursorY = subtreeBottom;
+
+    return { centerY, subtreeBottom };
   }
 
   for (const root of roots) {
     layoutNode(root.id, null);
     cursorY += TREE_GAP;
+  }
+
+  // ===== ORPHAN CLUSTERS =====
+  // Tiap orphan node punya cursorY lokal sendiri, independen dari main tree
+  // DAN dari orphan lain. Anchor FIXED dari orphanAnchorY (bukan position.y live)
+  // biar gak numpuk drift tiap kali di-relayout.
+  const orphanNodes = nodes.filter(
+    (n) => n.data?.isOrphan && !hiddenNodeIds.has(n.id),
+  );
+
+  for (const orphan of orphanNodes) {
+    cursorY = (orphan.data?.orphanAnchorY as number) ?? orphan.position.y;
+    layoutNode(orphan.id, null);
   }
 
   return positions;

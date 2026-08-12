@@ -231,7 +231,16 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     set((state) => ({
       edges: state.edges.filter((e) => e.target !== nodeId),
       nodes: state.nodes.map((n) =>
-        n.id === nodeId ? { ...n, data: { ...n.data, isOrphan: true } } : n,
+        n.id === nodeId
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                isOrphan: true,
+                orphanAnchorY: n.position.y,
+              },
+            }
+          : n,
       ),
     }));
   },
