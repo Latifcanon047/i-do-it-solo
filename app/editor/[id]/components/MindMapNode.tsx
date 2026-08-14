@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Handle, Position, useReactFlow, type NodeProps } from "@xyflow/react";
-import { Minus, Plus } from "lucide-react";
+import { Minus, Plus, Loader2 } from "lucide-react";
 import {
   Star,
   Flag,
@@ -51,7 +51,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   const [label, setLabel] = useState(data.label as string);
   const [hovered, setHovered] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
+  const imgRef = useRef<HTMLImageElement>(null);
   const bgColor = (data.bgColor as string) || "#FFFFFF";
   const borderColor = (data.borderColor as string) || "#D1D5DB";
   const iconKey = data.icon as string | undefined;
@@ -68,8 +68,15 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   const onAddSibling = data.onAddSibling as
     | ((nodeId: string) => void)
     | undefined;
+  const onImageFocus = data.onImageFocus as
+    | ((nodeId: string) => void)
+    | undefined;
+  const onImageSettled = data.onImageSettled as (() => void) | undefined;
   const imageUrl = data.imageUrl as string | undefined;
-
+  const imageUploading = !!data.imageUploading;
+  const imageFocused = !!data.imageFocused;
+  // Saat gambar fokus, ring/tombol node harus "diam" — fokus visual pindah ke gambar
+  const nodeVisuallyFocused = selected && !imageFocused;
   const minWidth = isRoot ? 160 : isDirectChildOfRoot ? 140 : 100;
   const minHeight = isRoot ? 48 : isDirectChildOfRoot ? 40 : 32;
   const contentMinWidth =
@@ -112,6 +119,14 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   useEffect(() => {
     setLabel(data.label as string);
   }, [data.label]);
+
+  // Cek cache-hit: kalau gambar udah "complete" duluan pas mount, onLoad
+  // gak bakal fire — trigger relayout manual di sini sebagai fallback.
+  useEffect(() => {
+    if (imgRef.current?.complete) {
+      onImageSettled?.();
+    }
+  }, [imageUrl]);
 
   // Saat masuk edit mode: resize sesuai konten + select semua
   useEffect(() => {
@@ -164,6 +179,11 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
     onAddSibling?.(id);
   }
 
+  function handleImageClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    onImageFocus?.(id);
+  }
+
   const dropZone = data.dropZone as
     | "before"
     | "after"
@@ -179,7 +199,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
         ? "ring-4 ring-green-500"
         : searchActive
           ? "ring-4 ring-orange-400"
-          : selected
+          : nodeVisuallyFocused
             ? "ring-2 ring-blue-400"
             : searchMatch
               ? "ring-2 ring-yellow-400"
@@ -218,17 +238,33 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} isConnectable={false} />
 
-      {/* Thumbnail */}
-      {imageUrl && (
+      {/* Thumbnail: uploading state */}
+      {imageUploading && (
         <div
-          className="w-full rounded-lg overflow-hidden mb-2"
+          className="w-full rounded-lg overflow-hidden mb-2 flex items-center justify-center bg-gray-100"
           style={{ height: THUMBNAIL_HEIGHT }}
         >
+          <Loader2 size={20} className="animate-spin text-gray-400" />
+        </div>
+      )}
+
+      {/* Thumbnail: image state */}
+      {!imageUploading && imageUrl && (
+        <div
+          className="relative mb-2 flex justify-center cursor-pointer"
+          onClick={handleImageClick}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           <img
+            ref={imgRef}
             src={imageUrl}
             alt=""
-            className="w-full h-full object-cover pointer-events-none"
+            className={`rounded-md pointer-events-none object-contain transition ${
+              imageFocused ? "ring-2 ring-blue-500" : ""
+            }`}
+            style={{ maxWidth: 240, maxHeight: 180 }}
             draggable={false}
+            onLoad={() => onImageSettled?.()}
           />
         </div>
       )}
@@ -286,7 +322,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
         </button>
       )}
 
-      {selected && !collapsed && (
+      {nodeVisuallyFocused && !collapsed && (
         <button
           onClick={handleAddChild}
           onMouseDown={(e) => e.stopPropagation()}
@@ -297,7 +333,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
         </button>
       )}
 
-      {selected && !isRoot && (
+      {nodeVisuallyFocused && !isRoot && (
         <button
           onClick={handleAddSibling}
           onMouseDown={(e) => e.stopPropagation()}

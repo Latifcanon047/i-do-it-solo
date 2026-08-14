@@ -23,6 +23,7 @@ import EditorToolbar from "./EditorToolbar";
 import SearchOverlay from "./SearchOverlay";
 import StyleSidebar from "./StyleSidebar";
 import CustomEdge from "./CustomEdge";
+import NodeContextMenu from "./NodeContextMenu";
 import { useMindMapStore, type DropZone } from "@/store/mindMapStore";
 import {
   layoutForest,
@@ -41,12 +42,60 @@ import {
 const nodeTypes = { mindmap: MindMapNode };
 const edgeTypes = { custom: CustomEdge };
 
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
 interface Props {
   mindMap: {
     id: string;
     title: string;
     content: unknown;
   };
+}
+
+const CLIENT_MAX_DIMENSION = 2048; // sisi terpanjang
+const CLIENT_QUALITY = 0.8;
+
+function compressImage(file: File): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+
+      const longestSide = Math.max(img.width, img.height);
+      const scale = Math.min(1, CLIENT_MAX_DIMENSION / longestSide);
+      const width = Math.round(img.width * scale);
+      const height = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("Canvas tidak didukung."));
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return reject(new Error("Gagal compress gambar."));
+          resolve(
+            new File([blob], file.name.replace(/\.[^.]+$/, ".webp"), {
+              type: "image/webp",
+            }),
+          );
+        },
+        "image/webp",
+        CLIENT_QUALITY,
+      );
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Gagal membaca gambar."));
+    };
+
+    img.src = objectUrl;
+  });
 }
 
 export default function EditorClient({ mindMap }: Props) {
@@ -70,6 +119,9 @@ function EditorCanvas({ mindMap }: Props) {
   const deleteSelected = useMindMapStore((s) => s.deleteSelected);
   const saveStatus = useMindMapStore((s) => s.saveStatus);
   const setSaveStatus = useMindMapStore((s) => s.setSaveStatus);
+  const setNodeImage = useMindMapStore((s) => s.setNodeImage);
+  const removeNodeImage = useMindMapStore((s) => s.removeNodeImage);
+  const setNodeImageUploading = useMindMapStore((s) => s.setNodeImageUploading);
 
   const saveTimeout = useRef<NodeJS.Timeout | null>(null);
   const isFirstRender = useRef(true);
@@ -82,6 +134,7 @@ function EditorCanvas({ mindMap }: Props) {
     id: string;
     position: { x: number; y: number };
   } | null>(null);
+  const lastClickedCanvasPos = useRef<{ x: number; y: number } | null>(null);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [mouseScreenPos, setMouseScreenPos] = useState<{
     x: number;
@@ -99,9 +152,176 @@ function EditorCanvas({ mindMap }: Props) {
   const previousTargetRef = useRef<string | null>(null);
   const commitDragDecision = useMindMapStore((s) => s.commitDragDecision);
   const orphanNode = useMindMapStore((s) => s.orphanNode);
+  const copyNode = useMindMapStore((s) => s.copyNode);
+  const pasteNode = useMindMapStore((s) => s.pasteNode);
+  const selectAll = useMindMapStore((s) => s.selectAll);
   const { zoom } = useViewport();
   const [miniMapOpen, setMiniMapOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
+
+  // ===== CONTEXT MENU =====
+  const [contextMenu, setContextMenu] = useState<{
+    nodeId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const pendingImageNodeId = useRef<string | null>(null);
+  const [focusedImageNodeId, setFocusedImageNodeId] = useState<string | null>(
+    null,
+  );
+
+  const onNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
+    e.preventDefault();
+    useMindMapStore.setState((state) => ({
+      nodes: state.nodes.map((n) => ({
+        ...n,
+        selected: n.id === node.id,
+      })),
+    }));
+    setContextMenu({ nodeId: node.id, x: e.clientX, y: e.clientY });
+  }, []);
+
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  const handleInsertImageClick = useCallback(() => {
+    if (!contextMenu) return;
+    pendingImageNodeId.current = contextMenu.nodeId;
+    imageInputRef.current?.click();
+  }, [contextMenu]);
+
+  const handleCopyFromContextMenu = useCallback(() => {
+    if (!contextMenu) return;
+    useMindMapStore.getState().copyNode(contextMenu.nodeId);
+  }, [contextMenu]);
+
+  const handlePasteFromContextMenu = useCallback(() => {
+    if (!contextMenu) return;
+    const newRootId = useMindMapStore
+      .getState()
+      .pasteNode("child", contextMenu.nodeId);
+    if (newRootId) requestAnimationFrame(() => runLayout(newRootId));
+  }, [contextMenu]);
+
+  const handleImageFileChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      const nodeId = pendingImageNodeId.current;
+      // Reset input value supaya bisa pilih file yang sama lagi nanti
+      e.target.value = "";
+      pendingImageNodeId.current = null;
+
+      if (!file || !nodeId) return;
+
+      if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+        alert("Format file harus JPG, PNG, atau WebP.");
+        return;
+      }
+      if (file.size > MAX_IMAGE_SIZE_BYTES) {
+        alert("Ukuran file maksimal 10MB.");
+        return;
+      }
+
+      // Simpan publicId gambar lama (kalau ada) sebelum ke-overwrite di store
+      const { nodes: nodesBeforeUpload } = useMindMapStore.getState();
+      const oldPublicId = nodesBeforeUpload.find((n) => n.id === nodeId)?.data
+        ?.imagePublicId as string | undefined;
+
+      setNodeImageUploading(nodeId, true);
+
+      try {
+        const compressedFile = await compressImage(file);
+
+        const formData = new FormData();
+        formData.append("file", compressedFile);
+        formData.append("mindMapId", mindMap.id);
+        formData.append("nodeId", nodeId);
+
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || "Upload gagal.");
+        }
+
+        setNodeImage(nodeId, data.url, data.publicId);
+
+        // Gambar baru udah sukses dipasang — cleanup gambar lama di Cloudinary
+        // (fire-and-forget, gak perlu blocking UI)
+        if (oldPublicId && oldPublicId !== data.publicId) {
+          fetch("/api/upload", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ publicId: oldPublicId }),
+          }).catch((err) => console.error("Hapus gambar lama gagal:", err));
+        }
+      } catch (err) {
+        console.error("Upload gambar gagal:", err);
+        alert(err instanceof Error ? err.message : "Upload gagal, coba lagi.");
+        setNodeImageUploading(nodeId, false);
+      }
+    },
+    [mindMap.id, setNodeImage, setNodeImageUploading],
+  );
+
+  const handleRemoveImage = useCallback(
+    (nodeId: string) => {
+      const { nodes: latestNodes } = useMindMapStore.getState();
+      const node = latestNodes.find((n) => n.id === nodeId);
+      const publicId = node?.data?.imagePublicId as string | undefined;
+      if (!publicId) return;
+
+      // jalan di background (fire-and-forget)
+      removeNodeImage(nodeId);
+
+      fetch("/api/upload", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ publicId }),
+      }).catch((err) => console.error("Hapus gambar gagal:", err));
+    },
+    [removeNodeImage],
+  );
+
+  // Fire-and-forget cleanup Cloudinary untuk banyak node sekaligus (dipakai
+  // saat delete node yang punya descendant dengan gambar). Gak menyentuh
+  // store karena node-nya toh langsung dihapus oleh deleteSelected().
+  const cleanupImagesForNodes = useCallback((nodeIds: string[]) => {
+    const { nodes: latestNodes } = useMindMapStore.getState();
+    for (const id of nodeIds) {
+      const node = latestNodes.find((n) => n.id === id);
+      const publicId = node?.data?.imagePublicId as string | undefined;
+      if (!publicId) continue;
+      fetch("/api/upload", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ publicId }),
+      }).catch((err) => console.error("Hapus gambar (cascade) gagal:", err));
+    }
+  }, []);
+
+  const handleImageFocus = useCallback((nodeId: string) => {
+    useMindMapStore.setState((state) => ({
+      nodes: state.nodes.map((n) => ({
+        ...n,
+        selected: n.id === nodeId,
+      })),
+    }));
+    setFocusedImageNodeId(nodeId);
+  }, []);
+
+  // Dipanggil langsung dari MindMapNode saat gambar selesai render (onLoad
+  // atau cache-hit). Sengaja gak lewat flag needsLayout + dimension event,
+  // karena timingnya racy (ResizeObserver bisa fire sebelum flag nyala).
+  const handleImageSettled = useCallback(() => {
+    requestAnimationFrame(() => runLayout());
+  }, []);
+
+  // ===== END CONTEXT MENU =====
+
   const handleAddChild = useCallback(
     (nodeId: string) => {
       const newId = addChild(nodeId);
@@ -116,13 +336,22 @@ function EditorCanvas({ mindMap }: Props) {
         selected: n.id === node.id,
       })),
     }));
+    setFocusedImageNodeId(null);
   }, []);
 
-  const onPaneClick = useCallback(() => {
-    useMindMapStore.setState((state) => ({
-      nodes: state.nodes.map((n) => ({ ...n, selected: false })),
-    }));
-  }, []);
+  const onPaneClick = useCallback(
+    (e: React.MouseEvent) => {
+      useMindMapStore.setState((state) => ({
+        nodes: state.nodes.map((n) => ({ ...n, selected: false })),
+      }));
+      setFocusedImageNodeId(null);
+      lastClickedCanvasPos.current = screenToFlowPosition({
+        x: e.clientX,
+        y: e.clientY,
+      });
+    },
+    [screenToFlowPosition],
+  );
 
   const handleNodesChange = useCallback(
     (changes: NodeChange[]) => {
@@ -676,6 +905,9 @@ function EditorCanvas({ mindMap }: Props) {
           isDirectChildOfRoot: rootId ? parentMap.get(n.id) === rootId : false,
           onAddChild: handleAddChild,
           onAddSibling: handleAddSibling,
+          imageFocused: n.id === focusedImageNodeId,
+          onImageFocus: handleImageFocus,
+          onImageSettled: handleImageSettled,
         },
       };
     });
@@ -686,6 +918,9 @@ function EditorCanvas({ mindMap }: Props) {
     matchIds,
     activeMatchId,
     dragDecision,
+    focusedImageNodeId,
+    handleImageFocus,
+    handleImageSettled,
   ]);
 
   const displayEdges = useMemo(() => {
@@ -700,44 +935,170 @@ function EditorCanvas({ mindMap }: Props) {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
 
-      if (e.key === "Delete" || e.key === "Backspace") {
-        const { nodes: latestNodes } = useMindMapStore.getState(); // ← fresh
-        const selected = latestNodes.find((n) => n.selected) ?? null;
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+      if (isCtrlOrCmd && e.key.toLowerCase() === "c") {
+        if (focusedImageNodeId) return;
+        const { nodes: latestNodes } = useMindMapStore.getState();
+        const selected = latestNodes.find((n) => n.selected);
         if (!selected) return;
         e.preventDefault();
-        if (selected.data?.isRoot) return;
+        copyNode(selected.id);
+        return;
+      }
+
+      if (isCtrlOrCmd && e.key.toLowerCase() === "v") {
+        if (focusedImageNodeId) return;
+        const { clipboard, nodes: latestNodes } = useMindMapStore.getState();
+        if (!clipboard) return;
+        e.preventDefault();
+
+        const selected = latestNodes.find((n) => n.selected);
+        let newRootId: string | null = null;
+
+        if (selected) {
+          newRootId = pasteNode("child", selected.id);
+        } else if (lastClickedCanvasPos.current) {
+          newRootId = pasteNode("orphan", lastClickedCanvasPos.current);
+        } else {
+          return;
+        }
+
+        if (newRootId) requestAnimationFrame(() => runLayout(newRootId!));
+        return;
+      }
+
+      if (isCtrlOrCmd && e.key.toLowerCase() === "a") {
+        if (focusedImageNodeId) return;
+        e.preventDefault();
+        selectAll();
+        return;
+      }
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const { nodes: latestNodes } = useMindMapStore.getState();
+        const selected = latestNodes.filter((n) => n.selected);
+        if (selected.length === 0) return;
+        e.preventDefault();
+
+        // Image lagi fokus → hapus image aja (single node context)
+        const primarySelected =
+          selected.find((n) => n.id === focusedImageNodeId) ??
+          selected.find((n) => !n.data?.isRoot) ??
+          null;
+        if (focusedImageNodeId && primarySelected?.data?.imageUrl) {
+          handleRemoveImage(primarySelected.id);
+          setFocusedImageNodeId(null);
+          return;
+        }
+
+        // Kalau semua yang selected cuma root → skip
+        const nonRootSelected = selected.filter((n) => !n.data?.isRoot);
+        if (nonRootSelected.length === 0) return;
+
+        // Hapus node — kumpulin selected + semua descendant-nya (sama persis
+        // logic cascade di store deleteSelected), lalu cleanup Cloudinary
+        // buat semua yang punya gambar (fire-and-forget)
+        const { edges: latestEdges } = useMindMapStore.getState();
+        const cMapForDelete = buildChildrenMap(latestEdges);
+        const idsToClean: string[] = [];
+        const stack: string[] = [];
+        for (const node of nonRootSelected) {
+          idsToClean.push(node.id);
+          stack.push(...(cMapForDelete.get(node.id) ?? []));
+        }
+        while (stack.length > 0) {
+          const cid = stack.pop()!;
+          idsToClean.push(cid);
+          stack.push(...(cMapForDelete.get(cid) ?? []));
+        }
+        cleanupImagesForNodes(idsToClean);
+
+        setFocusedImageNodeId(null);
         deleteSelected();
+        requestAnimationFrame(() => {
+          const { nodes: afterNodes } = useMindMapStore.getState();
+          const focusedNodes = afterNodes.filter((n) => n.selected);
+          if (focusedNodes.length > 0) {
+            fitView({
+              nodes: focusedNodes.map((n) => ({ id: n.id })),
+              duration: 300,
+              maxZoom: zoom,
+            });
+          }
+        });
         return;
       }
 
       if (e.key === "Enter") {
+        if (focusedImageNodeId) return;
         e.preventDefault();
         const { nodes: latestNodes } = useMindMapStore.getState();
-        const latestSelected = latestNodes.find((n) => n.selected);
-        if (!latestSelected) return;
-        const newId = latestSelected.data?.isRoot
-          ? addChild(latestSelected.id)
-          : addSibling(latestSelected.id);
-
-        requestAnimationFrame(() => {
-          const { nodes: afterNodes } = useMindMapStore.getState();
-          const afterSelected = afterNodes.find((n) => n.selected);
-          runLayout(newId ?? undefined);
-        });
+        const selectedNodes = latestNodes.filter((n) => n.selected);
+        if (selectedNodes.length === 0) return;
+        const newIds: string[] = [];
+        for (const node of selectedNodes) {
+          if (node.data?.isRoot) continue;
+          const newId = addSibling(node.id);
+          if (newId) newIds.push(newId);
+        }
+        if (newIds.length > 0) {
+          requestAnimationFrame(() => {
+            runLayout();
+            // Set semua node baru ke selected
+            useMindMapStore.setState((state) => ({
+              nodes: state.nodes.map((n) => ({
+                ...n,
+                selected: newIds.includes(n.id),
+              })),
+            }));
+            requestAnimationFrame(() => {
+              fitView({
+                nodes: newIds.map((id) => ({ id })),
+                duration: 300,
+                maxZoom: zoom,
+              });
+            });
+          });
+        }
         return;
       }
+
       if (e.key === "Tab") {
+        if (focusedImageNodeId) return;
         e.preventDefault();
-        const { nodes: latestNodes } = useMindMapStore.getState(); // ← fresh
-        const latestSelected = latestNodes.find((n) => n.selected);
-        if (!latestSelected) return;
-        // Tab selalu addChild, termasuk root
-        const newId = addChild(latestSelected.id);
-        if (newId) requestAnimationFrame(() => runLayout(newId));
+        const { nodes: latestNodes } = useMindMapStore.getState();
+        const selectedNodes = latestNodes.filter((n) => n.selected);
+        if (selectedNodes.length === 0) return;
+        const newIds: string[] = [];
+        for (const node of selectedNodes) {
+          const newId = addChild(node.id);
+          if (newId) newIds.push(newId);
+        }
+        if (newIds.length > 0) {
+          requestAnimationFrame(() => {
+            runLayout();
+            // Set semua node baru ke selected
+            useMindMapStore.setState((state) => ({
+              nodes: state.nodes.map((n) => ({
+                ...n,
+                selected: newIds.includes(n.id),
+              })),
+            }));
+            requestAnimationFrame(() => {
+              fitView({
+                nodes: newIds.map((id) => ({ id })),
+                duration: 300,
+                maxZoom: zoom,
+              });
+            });
+          });
+        }
         return;
       }
 
       if (e.key === " ") {
+        if (focusedImageNodeId) return;
         const { nodes: latestNodes } = useMindMapStore.getState(); // ← fresh
         const selected = latestNodes.find((n) => n.selected) ?? null;
         if (!selected) return;
@@ -758,6 +1119,7 @@ function EditorCanvas({ mindMap }: Props) {
         e.key === "ArrowUp" ||
         e.key === "ArrowDown"
       ) {
+        if (focusedImageNodeId) return;
         const { nodes: latestNodes, edges: latestEdges } =
           useMindMapStore.getState();
         const selected = latestNodes.find((n) => n.selected);
@@ -796,6 +1158,7 @@ function EditorCanvas({ mindMap }: Props) {
             selected: n.id === targetId,
           })),
         }));
+        setFocusedImageNodeId(null);
 
         requestAnimationFrame(() => {
           fitView({ nodes: [{ id: targetId! }], duration: 300, maxZoom: zoom });
@@ -806,7 +1169,18 @@ function EditorCanvas({ mindMap }: Props) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [searchOpen, addChild, addSibling, deleteSelected]);
+  }, [
+    searchOpen,
+    addChild,
+    addSibling,
+    deleteSelected,
+    focusedImageNodeId,
+    handleRemoveImage,
+    cleanupImagesForNodes,
+    copyNode,
+    pasteNode,
+    selectAll,
+  ]);
 
   return (
     <div className="w-screen h-screen flex flex-col">
@@ -832,6 +1206,26 @@ function EditorCanvas({ mindMap }: Props) {
         />
       )}
 
+      {/* Hidden file input untuk insert image dari context menu */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={handleImageFileChange}
+      />
+
+      {contextMenu && (
+        <NodeContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={closeContextMenu}
+          onInsertImage={handleInsertImageClick}
+          onCopy={handleCopyFromContextMenu}
+          onPaste={handlePasteFromContextMenu}
+          pasteDisabled={useMindMapStore((s) => s.clipboard) === null}
+        />
+      )}
       <div className="flex-1 relative">
         <ReactFlow
           nodes={displayNodes}
@@ -843,6 +1237,7 @@ function EditorCanvas({ mindMap }: Props) {
           onNodeDragStart={onNodeDragStart}
           onNodeDrag={onNodeDrag}
           onNodeDragStop={onNodeDragStop}
+          onNodeContextMenu={onNodeContextMenu}
           nodeTypes={nodeTypes}
           fitView
           deleteKeyCode={null}
