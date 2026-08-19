@@ -1,13 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function RegisterPage() {
-  const router = useRouter();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [submittedEmail, setSubmittedEmail] = useState("");
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -34,7 +34,29 @@ export default function RegisterPage() {
       return;
     }
 
-    router.push("/login");
+    setSubmittedEmail(formData.get("email") as string);
+    setSuccess(true);
+    setLoading(false);
+  }
+
+  if (success) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-full max-w-md bg-white rounded-xl shadow p-8 text-center">
+          <h1 className="text-2xl font-bold text-gray-800 mb-3">
+            Cek Email Kamu
+          </h1>
+          <p className="text-sm text-gray-600 mb-6">
+            Kami sudah kirim link verifikasi ke{" "}
+            <span className="font-medium text-gray-800">{submittedEmail}</span>.
+            Klik link di email itu untuk mengaktifkan akun kamu.
+          </p>
+          <Link href="/login" className="text-blue-600 hover:underline text-sm">
+            Kembali ke halaman login
+          </Link>
+        </div>
+      </div>
+    );
   }
 
   return (

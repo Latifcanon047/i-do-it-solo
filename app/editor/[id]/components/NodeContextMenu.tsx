@@ -55,10 +55,10 @@ export default function NodeContextMenu({
     function handleEscape(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
-    window.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("click", handleClickOutside);
     window.addEventListener("keydown", handleEscape);
     return () => {
-      window.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("click", handleClickOutside);
       window.removeEventListener("keydown", handleEscape);
     };
   }, [onClose]);
@@ -68,6 +68,7 @@ export default function NodeContextMenu({
       ref={menuRef}
       className="fixed z-[100] w-48 rounded-lg border border-slate-700 bg-slate-900 py-1 shadow-xl text-sm"
       style={{ left: pos.left, top: pos.top }}
+      onClick={(e) => e.stopPropagation()}
     >
       <div
         className="relative"

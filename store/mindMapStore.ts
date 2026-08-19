@@ -9,6 +9,7 @@ import {
 } from "@xyflow/react";
 import type { DragDecision } from "@/app/editor/[id]/lib/dragEngine";
 import { buildChildrenMap } from "@/app/editor/[id]/lib/layout";
+import type { CanvasTheme } from "@/app/editor/[id]/lib/themes";
 
 export type SaveStatus = "idle" | "saving" | "saved";
 export type DropZone = "before" | "after" | "child";
@@ -19,34 +20,57 @@ export interface ClipboardSubtreeNode {
   children: ClipboardSubtreeNode[];
 }
 
+interface Snapshot {
+  nodes: Node[];
+  edges: Edge[];
+}
+
+const MAX_HISTORY = 50;
+
 interface MindMapStore {
   mindMapId: string;
   mindMapTitle: string;
   nodes: Node[];
   edges: Edge[];
   saveStatus: SaveStatus;
+  clipboard: ClipboardSubtreeNode | null;
+  canvasTheme: CanvasTheme;
+  setCanvasTheme: (theme: CanvasTheme) => void;
+
+  // History
+  past: Snapshot[];
+  future: Snapshot[];
+  pushHistory: () => void;
+  undo: () => void;
+  redo: () => void;
 
   setSelectedNode: (nodeId: string) => void;
-  init: (id: string, title: string, nodes: Node[], edges: Edge[]) => void;
+  init: (
+    id: string,
+    title: string,
+    nodes: Node[],
+    edges: Edge[],
+    canvasTheme: CanvasTheme,
+  ) => void;
   applyNodeChanges: (changes: NodeChange[]) => void;
   applyEdgeChanges: (changes: EdgeChange[]) => void;
-  addChild: (parentId: string) => string | null;
-  addSibling: (nodeId: string) => string | null;
+  addChild: (parentId: string, _skipHistory?: boolean) => string | null;
+  addSibling: (nodeId: string, _skipHistory?: boolean) => string | null;
   deleteSelected: () => void;
   commitDragDecision: (decision: DragDecision) => void;
   orphanNode: (nodeId: string) => void;
   updateNodeStyle: (nodeId: string, style: Record<string, unknown>) => void;
+  updateNodeLabel: (nodeId: string, label: string) => void;
   setSaveStatus: (status: SaveStatus) => void;
   setNodeImage: (nodeId: string, url: string, publicId: string) => void;
   removeNodeImage: (nodeId: string) => void;
   setNodeImageUploading: (nodeId: string, uploading: boolean) => void;
-  clipboard: ClipboardSubtreeNode | null;
   copyNode: (nodeId: string) => void;
-  selectAll: () => void;
   pasteNode: (
     mode: "child" | "orphan",
     payload: string | { x: number; y: number },
   ) => string | null;
+  selectAll: () => void;
 }
 
 export const useMindMapStore = create<MindMapStore>((set, get) => ({
@@ -56,12 +80,68 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
   edges: [],
   saveStatus: "idle",
   clipboard: null,
+  canvasTheme: "dark",
+  setCanvasTheme: (theme) => set({ canvasTheme: theme }),
+  past: [],
+  future: [],
 
-  init: (id, title, nodes, edges) => {
-    set({ mindMapId: id, mindMapTitle: title, nodes, edges });
+  pushHistory: () => {
+    const { nodes, edges, past } = get();
+    const snapshot: Snapshot = {
+      nodes: nodes.map((n) => ({ ...n, data: { ...n.data } })),
+      edges: [...edges],
+    };
+    const newPast = [...past, snapshot];
+    if (newPast.length > MAX_HISTORY) newPast.shift();
+    set({ past: newPast, future: [] });
   },
 
-  // mindMapStore.ts
+  undo: () => {
+    const { past, nodes, edges, future } = get();
+    if (past.length === 0) return;
+    const prev = past[past.length - 1];
+    const newPast = past.slice(0, -1);
+    const currentSnapshot: Snapshot = {
+      nodes: nodes.map((n) => ({ ...n, data: { ...n.data } })),
+      edges: [...edges],
+    };
+    set({
+      past: newPast,
+      future: [currentSnapshot, ...future],
+      nodes: prev.nodes,
+      edges: prev.edges,
+    });
+  },
+
+  redo: () => {
+    const { past, nodes, edges, future } = get();
+    if (future.length === 0) return;
+    const next = future[0];
+    const newFuture = future.slice(1);
+    const currentSnapshot: Snapshot = {
+      nodes: nodes.map((n) => ({ ...n, data: { ...n.data } })),
+      edges: [...edges],
+    };
+    set({
+      past: [...past, currentSnapshot],
+      future: newFuture,
+      nodes: next.nodes,
+      edges: next.edges,
+    });
+  },
+
+  init: (id, title, nodes, edges, canvasTheme) => {
+    set({
+      mindMapId: id,
+      mindMapTitle: title,
+      nodes,
+      edges,
+      canvasTheme,
+      past: [],
+      future: [],
+    });
+  },
+
   applyNodeChanges: (changes) => {
     const { nodes } = get();
     const rootIds = new Set(
@@ -81,7 +161,8 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     }));
   },
 
-  addChild: (parentId) => {
+  addChild: (parentId, _skipHistory) => {
+    if (!_skipHistory) get().pushHistory();
     const { nodes, edges } = get();
     const parent = nodes.find((n) => n.id === parentId);
     if (!parent) return null;
@@ -107,21 +188,29 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     };
 
     set((state) => ({
-      nodes: [...state.nodes.map((n) => ({ ...n, selected: false })), newNode],
+      nodes: [
+        ...state.nodes.map((n) =>
+          n.id === parentId
+            ? { ...n, data: { ...n.data, collapsed: false }, selected: false }
+            : { ...n, selected: false },
+        ),
+        newNode,
+      ],
       edges: [...state.edges, newEdge],
     }));
 
     return id;
   },
 
-  addSibling: (nodeId) => {
+  addSibling: (nodeId, _skipHistory) => {
+    if (!_skipHistory) get().pushHistory();
     const { nodes, edges } = get();
     const selected = nodes.find((n) => n.id === nodeId);
     if (!selected) return null;
 
     const parentEdge = edges.find((e) => e.target === nodeId);
     if (!parentEdge || selected.data?.isRoot) {
-      return get().addChild(nodeId);
+      return get().addChild(nodeId, true); // skip history, sudah push di atas
     }
 
     const parentId = parentEdge.source;
@@ -166,6 +255,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
   },
 
   deleteSelected: () => {
+    get().pushHistory();
     set((state) => {
       const toDelete = state.nodes.filter((n) => n.selected && !n.data?.isRoot);
       const childrenMap = buildChildrenMap(state.edges);
@@ -232,6 +322,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
   },
 
   updateNodeStyle: (nodeId, style) => {
+    get().pushHistory();
     set((state) => ({
       nodes: state.nodes.map((n) =>
         n.id === nodeId ? { ...n, data: { ...n.data, ...style } } : n,
@@ -239,9 +330,21 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     }));
   },
 
+  updateNodeLabel: (nodeId, label) => {
+    get().pushHistory();
+    set((state) => ({
+      nodes: state.nodes.map((n) =>
+        n.id === nodeId
+          ? { ...n, data: { ...n.data, label, needsLayout: true } }
+          : n,
+      ),
+    }));
+  },
+
   setSaveStatus: (status) => set({ saveStatus: status }),
 
   setNodeImage: (nodeId, url, publicId) => {
+    get().pushHistory();
     set((state) => ({
       nodes: state.nodes.map((n) =>
         n.id === nodeId
@@ -260,6 +363,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
   },
 
   removeNodeImage: (nodeId) => {
+    get().pushHistory();
     set((state) => ({
       nodes: state.nodes.map((n) => {
         if (n.id !== nodeId) return n;
@@ -320,13 +424,8 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     if (snapshot) set({ clipboard: snapshot });
   },
 
-  selectAll: () => {
-    set((state) => ({
-      nodes: state.nodes.map((n) => ({ ...n, selected: true })),
-    }));
-  },
-
   pasteNode: (mode, payload) => {
+    get().pushHistory();
     const { clipboard, nodes, mindMapId } = get();
     if (!clipboard) return null;
 
@@ -421,6 +520,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
   },
 
   orphanNode: (nodeId) => {
+    get().pushHistory();
     const { nodes } = get();
     const node = nodes.find((n) => n.id === nodeId);
     if (!node || node.data?.isRoot) return;
@@ -443,6 +543,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
 
   commitDragDecision: (decision) => {
     if (decision.type === "BLOCK") return;
+    get().pushHistory();
 
     set((state) => {
       if (decision.type === "REPARENT") {
@@ -484,5 +585,11 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       result.splice(insertIndex, 0, newEdge);
       return { edges: result };
     });
+  },
+
+  selectAll: () => {
+    set((state) => ({
+      nodes: state.nodes.map((n) => ({ ...n, selected: true })),
+    }));
   },
 }));

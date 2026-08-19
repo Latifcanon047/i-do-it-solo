@@ -37,7 +37,15 @@ export async function PATCH(
   if (!session || !session.user)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await req.json();
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Body kosong atau tidak valid." },
+      { status: 400 },
+    );
+  }
 
   const mindMap = await prisma.mindMap.updateMany({
     where: { id, userId: session.user.id },
@@ -63,18 +71,24 @@ export async function DELETE(
   if (!mindMap)
     return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // Cleanup semua gambar node di Cloudinary dulu — sebelum hapus row DB.
-  // Kalau ini gagal, mindmap-nya masih tetap ada, jadi bisa di-retry.
+  const prefix = `mymind/${id}`;
+
   try {
-    const prefix = `mymind/${id}`;
     await cloudinary.api.delete_resources_by_prefix(prefix);
-    await cloudinary.api.delete_folder(prefix);
   } catch (err) {
     console.error("Cleanup Cloudinary gagal:", err);
     return NextResponse.json(
       { error: "Gagal membersihkan gambar, coba lagi." },
       { status: 500 },
     );
+  }
+
+  try {
+    await cloudinary.api.delete_folder(prefix);
+  } catch (err) {
+    // Folder emang gak akan ada kalau mindmap ini gak pernah punya gambar.
+    // Ini bukan kegagalan cleanup, jadi jangan block proses delete.
+    console.warn("Skip delete_folder (folder mungkin memang tidak ada):", err);
   }
 
   await prisma.mindMap.deleteMany({

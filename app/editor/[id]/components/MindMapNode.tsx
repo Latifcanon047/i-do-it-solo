@@ -22,6 +22,7 @@ import {
   Briefcase,
   type LucideIcon,
 } from "lucide-react";
+import { THEMES, type CanvasTheme } from "@/app/editor/[id]/lib/themes";
 
 export const ICON_MAP: Record<string, LucideIcon> = {
   star: Star,
@@ -52,8 +53,11 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   const [hovered, setHovered] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const bgColor = (data.bgColor as string) || "#FFFFFF";
-  const borderColor = (data.borderColor as string) || "#D1D5DB";
+  const nodeTheme =
+    THEMES[(data.canvasTheme as CanvasTheme) ?? "dark"] ?? THEMES.dark;
+  const bgColor = (data.bgColor as string) || nodeTheme.nodeDefaultBg;
+  const borderColor =
+    (data.borderColor as string) || nodeTheme.nodeDefaultBorder;
   const iconKey = data.icon as string | undefined;
   const IconComponent = iconKey ? ICON_MAP[iconKey] : null;
   const collapsed = !!data.collapsed;
@@ -70,6 +74,12 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
     | undefined;
   const onImageFocus = data.onImageFocus as
     | ((nodeId: string) => void)
+    | undefined;
+  const onLabelChange = data.onLabelChange as
+    | ((nodeId: string, label: string) => void)
+    | undefined;
+  const onToggleCollapse = data.onToggleCollapse as
+    | ((nodeId: string, collapsed: boolean) => void)
     | undefined;
   const onImageSettled = data.onImageSettled as (() => void) | undefined;
   const imageUrl = data.imageUrl as string | undefined;
@@ -153,7 +163,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
       textareaRef.current.style.height = "auto";
     }
     setEditing(false);
-    updateNodeData(id, { label, needsLayout: true });
+    onLabelChange?.(id, label);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -166,7 +176,9 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
   function toggleCollapse(e: React.MouseEvent) {
     e.stopPropagation();
-    updateNodeData(id, { collapsed: !collapsed });
+    const next = !collapsed;
+    updateNodeData(id, { collapsed: next });
+    onToggleCollapse?.(id, next);
   }
 
   function handleAddChild(e: React.MouseEvent) {
@@ -291,18 +303,22 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
             onBlur={handleBlur}
             onKeyDown={handleKeyDown}
             rows={1}
-            className={`outline-none bg-transparent text-gray-800 font-medium resize-none overflow-hidden ${fontClass}`}
+            className={`outline-none bg-transparent font-medium resize-none overflow-hidden ${fontClass}`}
             style={{
               ...contentStyle,
               padding: 0,
               margin: 0,
               border: "none",
+              color: data.bgColor ? "#1f2937" : nodeTheme.nodeDefaultText,
             }}
           />
         ) : (
           <span
-            className={`text-gray-800 font-medium ${fontClass}`}
-            style={contentStyle}
+            className={`font-medium ${fontClass}`}
+            style={{
+              ...contentStyle,
+              color: data.bgColor ? "#1f2937" : nodeTheme.nodeDefaultText,
+            }}
           >
             {label || "\u200B"}
           </span>

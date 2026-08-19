@@ -38,6 +38,7 @@ import {
   decideDragAction,
   type DragDecision,
 } from "@/app/editor/[id]/lib/dragEngine";
+import { THEMES, type CanvasTheme } from "@/app/editor/[id]/lib/themes";
 
 const nodeTypes = { mindmap: MindMapNode };
 const edgeTypes = { custom: CustomEdge };
@@ -50,6 +51,7 @@ interface Props {
     id: string;
     title: string;
     content: unknown;
+    canvasTheme: string;
   };
 }
 
@@ -155,7 +157,14 @@ function EditorCanvas({ mindMap }: Props) {
   const copyNode = useMindMapStore((s) => s.copyNode);
   const pasteNode = useMindMapStore((s) => s.pasteNode);
   const selectAll = useMindMapStore((s) => s.selectAll);
+  const undo = useMindMapStore((s) => s.undo);
+  const redo = useMindMapStore((s) => s.redo);
+  const updateNodeLabel = useMindMapStore((s) => s.updateNodeLabel);
+  const pushHistory = useMindMapStore((s) => s.pushHistory);
   const { zoom } = useViewport();
+  const canvasTheme = useMindMapStore((s) => s.canvasTheme);
+  const setCanvasTheme = useMindMapStore((s) => s.setCanvasTheme);
+  const theme = THEMES[canvasTheme];
   const [miniMapOpen, setMiniMapOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
 
@@ -202,6 +211,8 @@ function EditorCanvas({ mindMap }: Props) {
       .pasteNode("child", contextMenu.nodeId);
     if (newRootId) requestAnimationFrame(() => runLayout(newRootId));
   }, [contextMenu]);
+
+  const clipboard = useMindMapStore((s) => s.clipboard);
 
   const handleImageFileChange = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -312,6 +323,27 @@ function EditorCanvas({ mindMap }: Props) {
     }));
     setFocusedImageNodeId(nodeId);
   }, []);
+
+  const handleToggleCollapse = useCallback(
+    (nodeId: string) => {
+      requestAnimationFrame(() => {
+        fitView({ nodes: [{ id: nodeId }], duration: 300, maxZoom: zoom });
+      });
+    },
+    [fitView, zoom],
+  );
+
+  const handleThemeChange = useCallback(
+    (newTheme: CanvasTheme) => {
+      setCanvasTheme(newTheme);
+      fetch(`/api/mindmaps/${mindMap.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ canvasTheme: newTheme }),
+      }).catch((err) => console.error("Simpan theme gagal:", err));
+    },
+    [mindMap.id, setCanvasTheme],
+  );
 
   // Dipanggil langsung dari MindMapNode saat gambar selesai render (onLoad
   // atau cache-hit). Sengaja gak lewat flag needsLayout + dimension event,
@@ -434,7 +466,13 @@ function EditorCanvas({ mindMap }: Props) {
 
   useEffect(() => {
     const content = mindMap.content as { nodes: Node[]; edges: Edge[] };
-    init(mindMap.id, mindMap.title, content.nodes ?? [], content.edges ?? []);
+    init(
+      mindMap.id,
+      mindMap.title,
+      content.nodes ?? [],
+      content.edges ?? [],
+      (mindMap.canvasTheme as CanvasTheme) ?? "dark",
+    );
   }, [mindMap.id]);
 
   // Autosave
@@ -908,6 +946,9 @@ function EditorCanvas({ mindMap }: Props) {
           imageFocused: n.id === focusedImageNodeId,
           onImageFocus: handleImageFocus,
           onImageSettled: handleImageSettled,
+          onLabelChange: updateNodeLabel,
+          onToggleCollapse: handleToggleCollapse,
+          canvasTheme: canvasTheme,
         },
       };
     });
@@ -921,6 +962,8 @@ function EditorCanvas({ mindMap }: Props) {
     focusedImageNodeId,
     handleImageFocus,
     handleImageSettled,
+    handleImageSettled,
+    theme,
   ]);
 
   const displayEdges = useMemo(() => {
@@ -930,12 +973,56 @@ function EditorCanvas({ mindMap }: Props) {
     }));
   }, [edges, hiddenNodeIds]);
 
+  const dynamicTranslateExtent = useMemo<
+    [[number, number], [number, number]]
+  >(() => {
+    const MARGIN = 2000;
+    if (nodes.length === 0) {
+      return [
+        [-2000, -2000],
+        [12000, 10000],
+      ];
+    }
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (const n of nodes) {
+      const w = n.measured?.width ?? 150;
+      const h = n.measured?.height ?? 40;
+      minX = Math.min(minX, n.position.x);
+      minY = Math.min(minY, n.position.y);
+      maxX = Math.max(maxX, n.position.x + w);
+      maxY = Math.max(maxY, n.position.y + h);
+    }
+
+    return [
+      [minX - MARGIN, minY - MARGIN],
+      [maxX + MARGIN, maxY + MARGIN],
+    ];
+  }, [nodes]);
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
 
       const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+      if (isCtrlOrCmd && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        if (e.repeat) return;
+        e.preventDefault();
+        undo();
+        return;
+      }
+      if (isCtrlOrCmd && e.key.toLowerCase() === "z" && e.shiftKey) {
+        if (e.repeat) return;
+        e.preventDefault();
+        redo();
+        return;
+      }
 
       if (isCtrlOrCmd && e.key.toLowerCase() === "c") {
         if (focusedImageNodeId) return;
@@ -1031,15 +1118,16 @@ function EditorCanvas({ mindMap }: Props) {
       }
 
       if (e.key === "Enter") {
-        if (focusedImageNodeId) return;
+        if (focusedImageNodeId || e.repeat) return;
         e.preventDefault();
         const { nodes: latestNodes } = useMindMapStore.getState();
         const selectedNodes = latestNodes.filter((n) => n.selected);
         if (selectedNodes.length === 0) return;
+        pushHistory();
         const newIds: string[] = [];
         for (const node of selectedNodes) {
           if (node.data?.isRoot) continue;
-          const newId = addSibling(node.id);
+          const newId = addSibling(node.id, true);
           if (newId) newIds.push(newId);
         }
         if (newIds.length > 0) {
@@ -1065,14 +1153,15 @@ function EditorCanvas({ mindMap }: Props) {
       }
 
       if (e.key === "Tab") {
-        if (focusedImageNodeId) return;
+        if (focusedImageNodeId || e.repeat) return;
         e.preventDefault();
         const { nodes: latestNodes } = useMindMapStore.getState();
         const selectedNodes = latestNodes.filter((n) => n.selected);
         if (selectedNodes.length === 0) return;
+        pushHistory();
         const newIds: string[] = [];
         for (const node of selectedNodes) {
-          const newId = addChild(node.id);
+          const newId = addChild(node.id, true);
           if (newId) newIds.push(newId);
         }
         if (newIds.length > 0) {
@@ -1191,6 +1280,8 @@ function EditorCanvas({ mindMap }: Props) {
         styleOpen={stylePanelOpen}
         onBack={() => router.push("/dashboard")}
         onSearchClick={() => setSearchOpen(true)}
+        canvasTheme={canvasTheme}
+        onThemeChange={handleThemeChange}
       />
 
       {searchOpen && (
@@ -1223,7 +1314,7 @@ function EditorCanvas({ mindMap }: Props) {
           onInsertImage={handleInsertImageClick}
           onCopy={handleCopyFromContextMenu}
           onPaste={handlePasteFromContextMenu}
-          pasteDisabled={useMindMapStore((s) => s.clipboard) === null}
+          pasteDisabled={clipboard === null}
         />
       )}
       <div className="flex-1 relative">
@@ -1249,11 +1340,9 @@ function EditorCanvas({ mindMap }: Props) {
           selectionOnDrag={false}
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
-          translateExtent={[
-            [-2000, -2000],
-            [12000, 10000],
-          ]}
+          translateExtent={dynamicTranslateExtent}
           minZoom={0.25}
+          style={{ background: theme.canvasBg }}
         >
           {/* ghost node */}
           {ghostNode &&
@@ -1329,7 +1418,7 @@ function EditorCanvas({ mindMap }: Props) {
               </div>
             </div>
           )}
-          <Background />
+          <Background color={theme.patternColor} />{" "}
           <div className="absolute bottom-4 left-4 z-50">
             {!controlsOpen ? (
               /* =========================
@@ -1418,16 +1507,16 @@ function EditorCanvas({ mindMap }: Props) {
               style={{
                 width: 180,
                 height: 120,
-                backgroundColor: "#1a1a2e",
-                border: "1px solid #334155",
+                backgroundColor: theme.miniMapBg,
+                border: `1px solid ${theme.miniMapBorder}`,
                 borderRadius: "8px",
               }}
               nodeColor={(n) => {
                 if (n.data?.isRoot) return "#f59e0b";
                 if (n.data?.bgColor) return n.data.bgColor as string;
-                return "#ffffff";
+                return theme.miniMapNodeDefault;
               }}
-              maskColor="rgba(0,0,0,0.4)"
+              maskColor={theme.miniMapMask}
             />
           )}{" "}
         </ReactFlow>

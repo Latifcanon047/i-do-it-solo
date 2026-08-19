@@ -1,6 +1,15 @@
 "use client";
 
-import { Palette, Search } from "lucide-react";
+import {
+  Palette,
+  Search,
+  Sun,
+  Moon,
+  Leaf,
+  Waves,
+  Sparkles,
+} from "lucide-react";
+import type { CanvasTheme } from "@/app/editor/[id]/lib/themes";
 
 type SaveStatus = "idle" | "saving" | "saved";
 
@@ -11,7 +20,21 @@ interface Props {
   onSearchClick: () => void;
   onStyleClick: () => void;
   styleOpen: boolean;
+  canvasTheme: CanvasTheme;
+  onThemeChange: (theme: CanvasTheme) => void;
 }
+
+const THEME_OPTIONS: {
+  value: CanvasTheme;
+  icon: React.ReactNode;
+  label: string;
+}[] = [
+  { value: "light", icon: <Sun size={14} />, label: "Light" },
+  { value: "dark", icon: <Moon size={14} />, label: "Dark" },
+  { value: "soft", icon: <Leaf size={14} />, label: "Soft" },
+  { value: "ocean", icon: <Waves size={14} />, label: "Ocean" },
+  { value: "nebula", icon: <Sparkles size={14} />, label: "Nebula" },
+];
 
 export default function EditorToolbar({
   title,
@@ -20,6 +43,8 @@ export default function EditorToolbar({
   onSearchClick,
   onStyleClick,
   styleOpen,
+  canvasTheme,
+  onThemeChange,
 }: Props) {
   return (
     <div className="bg-white border-b px-4 py-2 flex items-center gap-3">
@@ -46,7 +71,24 @@ export default function EditorToolbar({
 
       <div className="flex-1" />
 
-      {/* Tombol Search */}
+      <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
+        {THEME_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => onThemeChange(opt.value)}
+            title={opt.label}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition ${
+              canvasTheme === opt.value
+                ? "bg-white text-gray-800 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {opt.icon}
+            <span>{opt.label}</span>
+          </button>
+        ))}
+      </div>
+
       <button
         onClick={onSearchClick}
         className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100"
@@ -55,7 +97,6 @@ export default function EditorToolbar({
         <Search size={16} />
       </button>
 
-      {/* Tombol Style Sidebar */}
       <button
         onClick={onStyleClick}
         className={`p-1.5 rounded-lg transition ${
