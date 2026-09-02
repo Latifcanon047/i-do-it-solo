@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X, Loader2, Plus, Trash2 } from "lucide-react";
+import { X, Loader2, Plus, Trash2, Copy, Check } from "lucide-react";
 interface Collaborator {
   id: string;
   mindMapId: string;
@@ -55,9 +55,14 @@ export default function ManageAccessModal({ mindMapId, role, onClose }: Props) {
   );
   const [inviteFormError, setInviteFormError] = useState<string | null>(null);
 
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const hasLoadedRef = useRef(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied">("idle");
+
   const fetchAccessList = useCallback(
     async (signal?: AbortSignal) => {
-      setLoading(true);
+      if (!hasLoadedRef.current) setLoading(true);
       setError(null);
       try {
         const res = await fetch(`/api/mindmaps/${mindMapId}/collaborators`, {
@@ -67,18 +72,18 @@ export default function ManageAccessModal({ mindMapId, role, onClose }: Props) {
         const data = await res.json();
         setCollaborators(data.collaborators ?? []);
         setPendingInvites(data.pendingInvites ?? []);
+        hasLoadedRef.current = true;
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setError(
           err instanceof Error ? err.message : "Gagal memuat daftar akses.",
         );
       } finally {
-        setLoading(false);
+        if (!signal?.aborted) setLoading(false);
       }
     },
     [mindMapId],
   );
-
   useEffect(() => {
     const controller = new AbortController();
     fetchAccessList(controller.signal);
@@ -96,6 +101,17 @@ export default function ManageAccessModal({ mindMapId, role, onClose }: Props) {
   function handleBackdropClick(e: React.MouseEvent) {
     if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
       onClose();
+    }
+  }
+
+  async function handleCopyLink() {
+    try {
+      const url = `${window.location.origin}/editor/${mindMapId}`;
+      await navigator.clipboard.writeText(url);
+      setCopyStatus("copied");
+      setTimeout(() => setCopyStatus("idle"), 2000);
+    } catch {
+      alert("Gagal menyalin link.");
     }
   }
 
@@ -162,6 +178,100 @@ export default function ManageAccessModal({ mindMapId, role, onClose }: Props) {
     }
   }
 
+  function markProcessing(id: string, processing: boolean) {
+    setProcessingIds((prev) => {
+      const next = new Set(prev);
+      if (processing) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function setRowError(id: string, message: string | null) {
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      if (message) next[id] = message;
+      else delete next[id];
+      return next;
+    });
+  }
+
+  async function handleCollaboratorRoleChange(
+    collaboratorId: string,
+    newRole: "EDITOR" | "VIEWER",
+  ) {
+    setRowError(collaboratorId, null);
+    markProcessing(collaboratorId, true);
+    try {
+      const res = await fetch(
+        `/api/mindmaps/${mindMapId}/collaborators/${collaboratorId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: newRole }),
+        },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setRowError(collaboratorId, data.error || "Gagal mengubah role.");
+        return;
+      }
+      await fetchAccessList();
+    } catch {
+      setRowError(collaboratorId, "Gagal mengubah role, coba lagi.");
+    } finally {
+      markProcessing(collaboratorId, false);
+    }
+  }
+
+  async function handleRemoveCollaborator(collaboratorId: string) {
+    setRowError(collaboratorId, null);
+    markProcessing(collaboratorId, true);
+    try {
+      const res = await fetch(
+        `/api/mindmaps/${mindMapId}/collaborators/${collaboratorId}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setRowError(
+          collaboratorId,
+          data.error || "Gagal menghapus collaborator.",
+        );
+        return;
+      }
+      await fetchAccessList();
+    } catch {
+      setRowError(collaboratorId, "Gagal menghapus collaborator, coba lagi.");
+    } finally {
+      markProcessing(collaboratorId, false);
+    }
+  }
+
+  async function handleCancelInvite(pendingInviteId: string) {
+    setRowError(pendingInviteId, null);
+    markProcessing(pendingInviteId, true);
+    try {
+      const res = await fetch(
+        `/api/mindmaps/${mindMapId}/pending-invites/${pendingInviteId}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setRowError(
+          pendingInviteId,
+          data.error || "Gagal membatalkan undangan.",
+        );
+        return;
+      }
+      await fetchAccessList();
+    } catch {
+      setRowError(pendingInviteId, "Gagal membatalkan undangan, coba lagi.");
+    } finally {
+      markProcessing(pendingInviteId, false);
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
@@ -172,7 +282,30 @@ export default function ManageAccessModal({ mindMapId, role, onClose }: Props) {
         className="w-full max-w-md rounded-xl bg-white shadow-2xl"
       >
         <div className="flex items-center justify-between border-b px-5 py-4">
-          <h2 className="text-sm font-semibold text-gray-800">Manage Access</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-gray-800">
+              Manage Access
+            </h2>
+            {isOwner && (
+              <button
+                onClick={handleCopyLink}
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                title="Salin link mindmap"
+              >
+                {copyStatus === "copied" ? (
+                  <>
+                    <Check size={13} className="text-green-600" />
+                    <span className="text-green-600">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={13} />
+                    <span>Copy link</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
@@ -266,8 +399,19 @@ export default function ManageAccessModal({ mindMapId, role, onClose }: Props) {
           )}
 
           {loading && (
-            <div className="flex items-center justify-center py-8 text-gray-400">
-              <Loader2 size={20} className="animate-spin" />
+            <div className="animate-pulse space-y-2">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between px-2 py-1.5"
+                >
+                  <div className="space-y-1.5">
+                    <div className="h-3 w-32 rounded bg-gray-200" />
+                    <div className="h-2.5 w-40 rounded bg-gray-100" />
+                  </div>
+                  <div className="h-4 w-14 rounded-full bg-gray-200" />
+                </div>
+              ))}
             </div>
           )}
 
@@ -287,31 +431,70 @@ export default function ManageAccessModal({ mindMapId, role, onClose }: Props) {
                   </p>
                 ) : (
                   <ul className="space-y-2">
-                    {collaborators.map((c) => (
-                      <li
-                        key={c.id}
-                        className="flex items-center justify-between rounded-lg px-2 py-1.5 hover:bg-gray-50"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-gray-800">
-                            {c.user.name}
-                          </p>
-                          <p className="truncate text-xs text-gray-400">
-                            {c.user.email}
-                          </p>
-                        </div>
-                        <div className="ml-2 flex shrink-0 items-center gap-2">
-                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-                            {c.role === "EDITOR" ? "Editor" : "Viewer"}
-                          </span>
-                          {isOwner && (
-                            <span className="text-xs text-gray-300">
-                              (aksi: Langkah E)
-                            </span>
+                    {collaborators.map((c) => {
+                      const isProcessing = processingIds.has(c.id);
+                      const rowError = rowErrors[c.id];
+                      return (
+                        <li
+                          key={c.id}
+                          className="rounded-lg px-2 py-1.5 hover:bg-gray-50"
+                        >
+                          <div
+                            className={`flex items-center justify-between ${
+                              isProcessing
+                                ? "pointer-events-none opacity-60"
+                                : ""
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-gray-800">
+                                {c.user.name}
+                              </p>
+                              <p className="truncate text-xs text-gray-400">
+                                {c.user.email}
+                              </p>
+                            </div>
+                            <div className="ml-2 flex shrink-0 items-center gap-2">
+                              {isOwner ? (
+                                <select
+                                  value={c.role}
+                                  disabled={isProcessing}
+                                  onChange={(e) =>
+                                    handleCollaboratorRoleChange(
+                                      c.id,
+                                      e.target.value as "EDITOR" | "VIEWER",
+                                    )
+                                  }
+                                  className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-600 focus:border-blue-400 focus:outline-none"
+                                >
+                                  <option value="EDITOR">Editor</option>
+                                  <option value="VIEWER">Viewer</option>
+                                </select>
+                              ) : (
+                                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                                  {c.role === "EDITOR" ? "Editor" : "Viewer"}
+                                </span>
+                              )}
+                              {isOwner && (
+                                <button
+                                  onClick={() => handleRemoveCollaborator(c.id)}
+                                  disabled={isProcessing}
+                                  className="shrink-0 rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"
+                                  title="Remove"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {rowError && (
+                            <p className="mt-1 text-xs text-red-500">
+                              {rowError}
+                            </p>
                           )}
-                        </div>
-                      </li>
-                    ))}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </section>
@@ -326,31 +509,53 @@ export default function ManageAccessModal({ mindMapId, role, onClose }: Props) {
                   </p>
                 ) : (
                   <ul className="space-y-2">
-                    {pendingInvites.map((p) => (
-                      <li
-                        key={p.id}
-                        className="flex items-center justify-between rounded-lg px-2 py-1.5 hover:bg-gray-50"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-gray-800">
-                            {p.email}
-                          </p>
-                          <p className="truncate text-xs text-gray-400">
-                            Menunggu diterima
-                          </p>
-                        </div>
-                        <div className="ml-2 flex shrink-0 items-center gap-2">
-                          <span className="rounded-full bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-700">
-                            {p.role === "EDITOR" ? "Editor" : "Viewer"}
-                          </span>
-                          {isOwner && (
-                            <span className="text-xs text-gray-300">
-                              (aksi: Langkah E)
-                            </span>
+                    {pendingInvites.map((p) => {
+                      const isProcessing = processingIds.has(p.id);
+                      const rowError = rowErrors[p.id];
+                      return (
+                        <li
+                          key={p.id}
+                          className="rounded-lg px-2 py-1.5 hover:bg-gray-50"
+                        >
+                          <div
+                            className={`flex items-center justify-between ${
+                              isProcessing
+                                ? "pointer-events-none opacity-60"
+                                : ""
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-gray-800">
+                                {p.email}
+                              </p>
+                              <p className="truncate text-xs text-gray-400">
+                                Menunggu diterima
+                              </p>
+                            </div>
+                            <div className="ml-2 flex shrink-0 items-center gap-2">
+                              <span className="rounded-full bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-700">
+                                {p.role === "EDITOR" ? "Editor" : "Viewer"}
+                              </span>
+                              {isOwner && (
+                                <button
+                                  onClick={() => handleCancelInvite(p.id)}
+                                  disabled={isProcessing}
+                                  className="shrink-0 rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"
+                                  title="Cancel"
+                                >
+                                  <X size={14} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {rowError && (
+                            <p className="mt-1 text-xs text-red-500">
+                              {rowError}
+                            </p>
                           )}
-                        </div>
-                      </li>
-                    ))}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </section>

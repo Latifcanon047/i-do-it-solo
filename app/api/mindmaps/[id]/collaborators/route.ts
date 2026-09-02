@@ -39,6 +39,8 @@ type InviteResult =
   | { email: string; success: true; type: "collaborator" | "pendingInvite" }
   | { email: string; success: false; error: string };
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -97,6 +99,15 @@ export async function POST(
       continue;
     }
 
+    if (!EMAIL_REGEX.test(email)) {
+      results.push({
+        email,
+        success: false,
+        error: "Format email tidak valid.",
+      });
+      continue;
+    }
+
     if (ownerUser?.email === email) {
       results.push({
         email,
@@ -109,6 +120,12 @@ export async function POST(
     const existingUser = await prisma.user.findUnique({ where: { email } });
 
     if (existingUser) {
+      const previousCollaborator = await prisma.mindMapCollaborator.findUnique({
+        where: {
+          mindMapId_userId: { mindMapId: id, userId: existingUser.id },
+        },
+      });
+
       await prisma.mindMapCollaborator.upsert({
         where: {
           mindMapId_userId: { mindMapId: id, userId: existingUser.id },
@@ -117,11 +134,43 @@ export async function POST(
         create: { mindMapId: id, userId: existingUser.id, role: inviteRole },
       });
 
-      await sendInviteToExistingUserEmail(email, mindMap.title, inviteRole, id);
+      try {
+        await sendInviteToExistingUserEmail(
+          email,
+          mindMap.title,
+          inviteRole,
+          id,
+        );
+      } catch {
+        if (previousCollaborator) {
+          await prisma.mindMapCollaborator.update({
+            where: {
+              mindMapId_userId: { mindMapId: id, userId: existingUser.id },
+            },
+            data: { role: previousCollaborator.role },
+          });
+        } else {
+          await prisma.mindMapCollaborator.delete({
+            where: {
+              mindMapId_userId: { mindMapId: id, userId: existingUser.id },
+            },
+          });
+        }
+        results.push({
+          email,
+          success: false,
+          error: "Gagal mengirim email notifikasi, undangan dibatalkan.",
+        });
+        continue;
+      }
 
       results.push({ email, success: true, type: "collaborator" });
       continue;
     }
+
+    const previousPendingInvite = await prisma.pendingInvite.findUnique({
+      where: { mindMapId_email: { mindMapId: id, email } },
+    });
 
     const expiresAt = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000);
     const token = crypto.randomUUID();
@@ -132,12 +181,35 @@ export async function POST(
       create: { mindMapId: id, email, role: inviteRole, expiresAt, token },
     });
 
-    await sendInviteToNewUserEmail(
-      email,
-      mindMap.title,
-      inviteRole,
-      pendingInvite.token,
-    );
+    try {
+      await sendInviteToNewUserEmail(
+        email,
+        mindMap.title,
+        inviteRole,
+        pendingInvite.token,
+      );
+    } catch {
+      if (previousPendingInvite) {
+        await prisma.pendingInvite.update({
+          where: { mindMapId_email: { mindMapId: id, email } },
+          data: {
+            role: previousPendingInvite.role,
+            expiresAt: previousPendingInvite.expiresAt,
+            token: previousPendingInvite.token,
+          },
+        });
+      } else {
+        await prisma.pendingInvite.delete({
+          where: { mindMapId_email: { mindMapId: id, email } },
+        });
+      }
+      results.push({
+        email,
+        success: false,
+        error: "Gagal mengirim email undangan, dibatalkan.",
+      });
+      continue;
+    }
 
     results.push({ email, success: true, type: "pendingInvite" });
   }
