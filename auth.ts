@@ -2,7 +2,6 @@ import NextAuth, { CredentialsSignin } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
-
 import prisma from "@/lib/prisma";
 
 class EmailNotVerifiedError extends CredentialsSignin {
@@ -79,6 +78,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             emailVerified: new Date(),
           },
         });
+
         return true;
       }
 
@@ -95,6 +95,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
       return true;
     },
+
     async jwt({ token, user, account }) {
       // Login baru — user object ada
       if (user) {

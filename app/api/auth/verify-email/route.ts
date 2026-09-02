@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { sanitizeCallbackUrl } from "@/lib/callbackUrl";
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const token = searchParams.get("token");
+    const safeCallbackUrl = sanitizeCallbackUrl(
+      searchParams.get("callbackUrl"),
+    );
 
     if (!token) {
       return NextResponse.redirect(
@@ -40,7 +44,10 @@ export async function GET(req: Request) {
     // Hapus PendingRegistration
     await prisma.pendingRegistration.delete({ where: { token } });
 
-    return NextResponse.redirect(new URL("/login?verify=success", req.url));
+    const loginUrl = new URL("/login?verify=success", req.url);
+    if (safeCallbackUrl)
+      loginUrl.searchParams.set("callbackUrl", safeCallbackUrl);
+    return NextResponse.redirect(loginUrl);
   } catch {
     return NextResponse.json(
       { error: "Terjadi kesalahan server." },

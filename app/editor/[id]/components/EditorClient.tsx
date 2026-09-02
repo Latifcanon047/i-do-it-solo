@@ -24,6 +24,10 @@ import SearchOverlay from "./SearchOverlay";
 import StyleSidebar from "./StyleSidebar";
 import CustomEdge from "./CustomEdge";
 import NodeContextMenu from "./NodeContextMenu";
+import ManageAccessModal from "./ManageAccessModal";
+import CollabRoomProvider from "./CollabRoomProvider";
+import { useLiveblocksSync } from "./useLiveblocksSync";
+import LiveCursors, { usePublishCursor } from "./LiveCursors";
 import { useMindMapStore, type DropZone } from "@/store/mindMapStore";
 import {
   layoutForest,
@@ -39,6 +43,7 @@ import {
   type DragDecision,
 } from "@/app/editor/[id]/lib/dragEngine";
 import { THEMES, type CanvasTheme } from "@/app/editor/[id]/lib/themes";
+import { useThemeSync } from "./useThemeSync";
 
 const nodeTypes = { mindmap: MindMapNode };
 const edgeTypes = { custom: CustomEdge };
@@ -53,6 +58,7 @@ interface Props {
     content: unknown;
     canvasTheme: string;
   };
+  role: "OWNER" | "EDITOR" | "VIEWER";
 }
 
 const CLIENT_MAX_DIMENSION = 2048; // sisi terpanjang
@@ -100,15 +106,24 @@ function compressImage(file: File): Promise<File> {
   });
 }
 
-export default function EditorClient({ mindMap }: Props) {
+export default function EditorClient({ mindMap, role }: Props) {
+  const content = mindMap.content as { nodes: Node[]; edges: Edge[] };
+
   return (
-    <ReactFlowProvider>
-      <EditorCanvas mindMap={mindMap} />
-    </ReactFlowProvider>
+    <CollabRoomProvider
+      mindMapId={mindMap.id}
+      initialNodes={content.nodes ?? []}
+      initialEdges={content.edges ?? []}
+      initialTheme={(mindMap.canvasTheme as CanvasTheme) ?? "dark"}
+    >
+      <ReactFlowProvider>
+        <EditorCanvas mindMap={mindMap} role={role} />
+      </ReactFlowProvider>
+    </CollabRoomProvider>
   );
 }
 
-function EditorCanvas({ mindMap }: Props) {
+function EditorCanvas({ mindMap, role }: Props) {
   const router = useRouter();
 
   const init = useMindMapStore((s) => s.init);
@@ -116,6 +131,7 @@ function EditorCanvas({ mindMap }: Props) {
   const edges = useMindMapStore((s) => s.edges);
   const applyNodeChanges = useMindMapStore((s) => s.applyNodeChanges);
   const applyEdgeChanges = useMindMapStore((s) => s.applyEdgeChanges);
+  const applyRemoteUpdate = useMindMapStore((s) => s.applyRemoteUpdate);
   const addChild = useMindMapStore((s) => s.addChild);
   const addSibling = useMindMapStore((s) => s.addSibling);
   const deleteSelected = useMindMapStore((s) => s.deleteSelected);
@@ -128,9 +144,15 @@ function EditorCanvas({ mindMap }: Props) {
   const saveTimeout = useRef<NodeJS.Timeout | null>(null);
   const isFirstRender = useRef(true);
   const [stylePanelOpen, setStylePanelOpen] = useState(false);
+  const [manageAccessOpen, setManageAccessOpen] = useState(false);
   const selectedNode = nodes.find((n) => n.selected) ?? null;
   const { fitView, setNodes, flowToScreenPosition, screenToFlowPosition } =
     useReactFlow();
+  const {
+    onPointerMove: onCursorPointerMove,
+    onPointerLeave: onCursorPointerLeave,
+  } = usePublishCursor();
+  useLiveblocksSync(nodes, edges, applyRemoteUpdate, role);
   const [dragDecision, setDragDecision] = useState<DragDecision | null>(null);
   const dragOriginRef = useRef<{
     id: string;
@@ -160,10 +182,11 @@ function EditorCanvas({ mindMap }: Props) {
   const undo = useMindMapStore((s) => s.undo);
   const redo = useMindMapStore((s) => s.redo);
   const updateNodeLabel = useMindMapStore((s) => s.updateNodeLabel);
-  const pushHistory = useMindMapStore((s) => s.pushHistory);
+  const commitHistory = useMindMapStore((s) => s.commitHistory);
   const { zoom } = useViewport();
   const canvasTheme = useMindMapStore((s) => s.canvasTheme);
   const setCanvasTheme = useMindMapStore((s) => s.setCanvasTheme);
+  const { pushTheme } = useThemeSync(canvasTheme, setCanvasTheme);
   const theme = THEMES[canvasTheme];
   const [miniMapOpen, setMiniMapOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -336,13 +359,14 @@ function EditorCanvas({ mindMap }: Props) {
   const handleThemeChange = useCallback(
     (newTheme: CanvasTheme) => {
       setCanvasTheme(newTheme);
+      pushTheme(newTheme);
       fetch(`/api/mindmaps/${mindMap.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ canvasTheme: newTheme }),
       }).catch((err) => console.error("Simpan theme gagal:", err));
     },
-    [mindMap.id, setCanvasTheme],
+    [mindMap.id, setCanvasTheme, pushTheme],
   );
 
   // Dipanggil langsung dari MindMapNode saat gambar selesai render (onLoad
@@ -482,6 +506,12 @@ function EditorCanvas({ mindMap }: Props) {
       return;
     }
 
+    // VIEWER gak boleh nulis (backend nolak PATCH dengan 404 by design) —
+    // skip autosave sama sekali biar gak spam request gagal.
+    if (role === "VIEWER") {
+      return;
+    }
+
     setSaveStatus("saving");
 
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
@@ -502,7 +532,7 @@ function EditorCanvas({ mindMap }: Props) {
     return () => {
       if (saveTimeout.current) clearTimeout(saveTimeout.current);
     };
-  }, [nodes, edges, mindMap.id]);
+  }, [nodes, edges, mindMap.id, role]);
 
   // Derived maps — pakai layout engine
   const childrenMap = useMemo(() => buildChildrenMap(edges), [edges]);
@@ -1123,13 +1153,13 @@ function EditorCanvas({ mindMap }: Props) {
         const { nodes: latestNodes } = useMindMapStore.getState();
         const selectedNodes = latestNodes.filter((n) => n.selected);
         if (selectedNodes.length === 0) return;
-        pushHistory();
         const newIds: string[] = [];
         for (const node of selectedNodes) {
           if (node.data?.isRoot) continue;
           const newId = addSibling(node.id, true);
           if (newId) newIds.push(newId);
         }
+        commitHistory();
         if (newIds.length > 0) {
           requestAnimationFrame(() => {
             runLayout();
@@ -1158,12 +1188,12 @@ function EditorCanvas({ mindMap }: Props) {
         const { nodes: latestNodes } = useMindMapStore.getState();
         const selectedNodes = latestNodes.filter((n) => n.selected);
         if (selectedNodes.length === 0) return;
-        pushHistory();
         const newIds: string[] = [];
         for (const node of selectedNodes) {
           const newId = addChild(node.id, true);
           if (newId) newIds.push(newId);
         }
+        commitHistory();
         if (newIds.length > 0) {
           requestAnimationFrame(() => {
             runLayout();
@@ -1282,6 +1312,9 @@ function EditorCanvas({ mindMap }: Props) {
         onSearchClick={() => setSearchOpen(true)}
         canvasTheme={canvasTheme}
         onThemeChange={handleThemeChange}
+        onManageAccessClick={() => {
+          setManageAccessOpen((v) => !v);
+        }}
       />
 
       {searchOpen && (
@@ -1317,7 +1350,11 @@ function EditorCanvas({ mindMap }: Props) {
           pasteDisabled={clipboard === null}
         />
       )}
-      <div className="flex-1 relative">
+      <div
+        className="flex-1 relative"
+        onPointerMove={onCursorPointerMove}
+        onPointerLeave={onCursorPointerLeave}
+      >
         <ReactFlow
           nodes={displayNodes}
           edges={displayEdges}
@@ -1520,7 +1557,6 @@ function EditorCanvas({ mindMap }: Props) {
             />
           )}{" "}
         </ReactFlow>
-
         {ghostEdgePath && (
           <svg
             className="absolute inset-0 w-full h-full pointer-events-none z-40"
@@ -1536,6 +1572,8 @@ function EditorCanvas({ mindMap }: Props) {
           </svg>
         )}
 
+        <LiveCursors />
+
         {stylePanelOpen && (
           <StyleSidebar
             selectedNode={selectedNode}
@@ -1543,6 +1581,14 @@ function EditorCanvas({ mindMap }: Props) {
           />
         )}
       </div>
+
+      {manageAccessOpen && (
+        <ManageAccessModal
+          mindMapId={mindMap.id}
+          role={role}
+          onClose={() => setManageAccessOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -1,8 +1,9 @@
 "use client";
 
-import { useReactFlow, type Node } from "@xyflow/react";
+import { type Node } from "@xyflow/react";
 import { X } from "lucide-react";
 import { ICON_MAP } from "./MindMapNode";
+import { useMindMapStore } from "@/store/mindMapStore";
 
 const PRESET_COLORS = [
   "#FFFFFF",
@@ -32,8 +33,7 @@ interface Props {
 }
 
 export default function StyleSidebar({ selectedNode, onClose }: Props) {
-  const { updateNodeData } = useReactFlow();
-
+  const updateNodeStyle = useMindMapStore((s) => s.updateNodeStyle);
   const hasSelection = !!selectedNode;
   const bgColor = (selectedNode?.data?.bgColor as string) || "#FFFFFF";
   const borderColor = (selectedNode?.data?.borderColor as string) || "#D1D5DB";
@@ -41,17 +41,17 @@ export default function StyleSidebar({ selectedNode, onClose }: Props) {
 
   function setBgColor(color: string) {
     if (!selectedNode) return;
-    updateNodeData(selectedNode.id, { bgColor: color });
+    updateNodeStyle(selectedNode.id, { bgColor: color });
   }
 
   function setBorderColor(color: string) {
     if (!selectedNode) return;
-    updateNodeData(selectedNode.id, { borderColor: color });
+    updateNodeStyle(selectedNode.id, { borderColor: color });
   }
 
   function setIcon(key: string | undefined) {
     if (!selectedNode) return;
-    updateNodeData(selectedNode.id, { icon: key });
+    updateNodeStyle(selectedNode.id, { icon: key });
   }
 
   return (

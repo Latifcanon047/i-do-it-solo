@@ -2,6 +2,7 @@ import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
 import EditorClient from "./components/EditorClient";
+import { getMindMapRole } from "@/lib/permissions";
 
 export default async function EditorPage({
   params,
@@ -12,11 +13,11 @@ export default async function EditorPage({
   const session = await auth();
   if (!session || !session.user) redirect("/login");
 
-  const mindMap = await prisma.mindMap.findFirst({
-    where: { id, userId: session.user.id! },
-  });
+  const role = await getMindMapRole(id, session.user.id!);
+  if (!role) redirect("/dashboard");
 
+  const mindMap = await prisma.mindMap.findUnique({ where: { id } });
   if (!mindMap) redirect("/dashboard");
 
-  return <EditorClient mindMap={mindMap} />;
+  return <EditorClient mindMap={mindMap} role={role} />;
 }

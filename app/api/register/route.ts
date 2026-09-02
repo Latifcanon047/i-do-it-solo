@@ -3,11 +3,12 @@ import prisma from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { sendVerificationEmail } from "@/lib/mail";
+import { sanitizeCallbackUrl } from "@/lib/callbackUrl";
 
 export async function POST(req: Request) {
   try {
-    const { name, email, password } = await req.json();
-
+    const { name, email, password, callbackUrl } = await req.json();
+    const safeCallbackUrl = sanitizeCallbackUrl(callbackUrl);
     // Validasi input dasar
     if (!name || !email || !password) {
       return NextResponse.json(
@@ -56,7 +57,7 @@ export async function POST(req: Request) {
 
     // Kirim email — kalau gagal, hapus pending row
     try {
-      await sendVerificationEmail(email, token);
+      await sendVerificationEmail(email, token, safeCallbackUrl);
     } catch {
       await prisma.pendingRegistration.delete({ where: { email } });
       return NextResponse.json(

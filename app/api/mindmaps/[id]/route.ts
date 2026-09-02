@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
 import { v2 as cloudinary } from "cloudinary";
+import { getMindMapRole, canView, canEdit, canManage } from "@/lib/permissions";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -18,8 +19,12 @@ export async function GET(
   if (!session || !session.user)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const mindMap = await prisma.mindMap.findFirst({
-    where: { id, userId: session.user.id },
+  const role = await getMindMapRole(id, session.user.id);
+  if (!canView(role))
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const mindMap = await prisma.mindMap.findUnique({
+    where: { id },
   });
 
   if (!mindMap)
@@ -47,8 +52,12 @@ export async function PATCH(
     );
   }
 
+  const role = await getMindMapRole(id, session.user.id);
+  if (!canEdit(role))
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const mindMap = await prisma.mindMap.updateMany({
-    where: { id, userId: session.user.id },
+    where: { id },
     data: body,
   });
 
@@ -65,6 +74,11 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   // Verifikasi dulu mindmap ini beneran punya user ini sebelum hapus apapun
+  // Verifikasi dulu mindmap ini beneran punya user ini sebelum hapus apapun
+  const role = await getMindMapRole(id, session.user.id);
+  if (!canManage(role))
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const mindMap = await prisma.mindMap.findFirst({
     where: { id, userId: session.user.id },
   });

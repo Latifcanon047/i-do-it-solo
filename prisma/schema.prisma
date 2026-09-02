@@ -15,7 +15,9 @@ model MindMap {
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
+  collaborators MindMapCollaborator[]
+  pendingInvites PendingInvite[]
 }
 
 model User {
@@ -28,6 +30,7 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   mindMaps      MindMap[]
+  collaboratingOn MindMapCollaborator[]
 }
 
 model PendingRegistration {
@@ -38,4 +41,34 @@ model PendingRegistration {
   token     String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
+}
+
+enum CollaboratorRole {
+  EDITOR
+  VIEWER
+}
+
+model MindMapCollaborator {
+  id        String           @id @default(cuid())
+  mindMapId String
+  mindMap   MindMap          @relation(fields: [mindMapId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      CollaboratorRole
+  invitedAt DateTime         @default(now())
+
+  @@unique([mindMapId, userId])
+}
+
+model PendingInvite {
+  id        String           @id @default(cuid())
+  mindMapId String
+  mindMap   MindMap          @relation(fields: [mindMapId], references: [id], onDelete: Cascade)
+  email     String
+  role      CollaboratorRole
+  token     String           @unique @default(cuid())
+  invitedAt DateTime         @default(now())
+  expiresAt DateTime
+
+  @@unique([mindMapId, email])
 }

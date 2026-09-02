@@ -8,10 +8,26 @@ export default async function DashboardPage() {
 
   if (!session || !session.user) redirect("/login");
 
-  const mindMaps = await prisma.mindMap.findMany({
-    where: { userId: session.user.id! },
-    orderBy: { updatedAt: "desc" },
-  });
+  const userId = session.user.id!;
+
+  const [ownedMaps, collaboratingMaps] = await Promise.all([
+    prisma.mindMap.findMany({
+      where: { userId },
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.mindMapCollaborator.findMany({
+      where: { userId },
+      include: { mindMap: true },
+      orderBy: { mindMap: { updatedAt: "desc" } },
+    }),
+  ]);
+
+  const mindMaps = [
+    ...ownedMaps.map((m) => ({ ...m, role: "OWNER" as const })),
+    ...collaboratingMaps.map((c) => ({ ...c.mindMap, role: c.role })),
+  ].sort(
+    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+  );
 
   return <DashboardClient mindMaps={mindMaps} user={session.user} />;
 }

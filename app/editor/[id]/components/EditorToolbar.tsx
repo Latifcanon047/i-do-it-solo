@@ -8,6 +8,7 @@ import {
   Leaf,
   Waves,
   Sparkles,
+  Users,
 } from "lucide-react";
 import type { CanvasTheme } from "@/app/editor/[id]/lib/themes";
 
@@ -22,6 +23,7 @@ interface Props {
   styleOpen: boolean;
   canvasTheme: CanvasTheme;
   onThemeChange: (theme: CanvasTheme) => void;
+  onManageAccessClick: () => void;
 }
 
 const THEME_OPTIONS: {
@@ -45,6 +47,7 @@ export default function EditorToolbar({
   styleOpen,
   canvasTheme,
   onThemeChange,
+  onManageAccessClick,
 }: Props) {
   return (
     <div className="bg-white border-b px-4 py-2 flex items-center gap-3">
@@ -70,6 +73,15 @@ export default function EditorToolbar({
       )}
 
       <div className="flex-1" />
+
+      <button
+        onClick={onManageAccessClick}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 border border-gray-200"
+        title="Kelola akses"
+      >
+        <Users size={15} />
+        <span>Manage Access</span>
+      </button>
 
       <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
         {THEME_OPTIONS.map((opt) => (

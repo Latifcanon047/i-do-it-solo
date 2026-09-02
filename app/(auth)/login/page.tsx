@@ -4,6 +4,7 @@ import { signIn } from "next-auth/react";
 import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { sanitizeCallbackUrl } from "@/lib/callbackUrl";
 
 const verifyMessages: Record<
   string,
@@ -29,6 +30,8 @@ function LoginForm() {
 
   const verifyParam = searchParams.get("verify");
   const verifyInfo = verifyParam ? verifyMessages[verifyParam] : null;
+  const callbackUrl =
+    sanitizeCallbackUrl(searchParams.get("callbackUrl")) ?? "/dashboard";
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -55,7 +58,7 @@ function LoginForm() {
       return;
     }
 
-    router.push("/dashboard");
+    router.push(callbackUrl);
   }
 
   return (
@@ -125,7 +128,7 @@ function LoginForm() {
 
         <button
           type="button"
-          onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
+          onClick={() => signIn("google", { callbackUrl })}
           className="w-full flex items-center justify-center gap-2 border border-gray-300 rounded-lg py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
         >
           <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -151,7 +154,15 @@ function LoginForm() {
 
         <p className="mt-4 text-sm text-gray-600 text-center">
           Belum punya akun?{" "}
-          <Link href="/register" className="text-blue-600 hover:underline">
+          <Link
+            href={
+              callbackUrl !== "/dashboard"
+                ? `/register?callbackUrl=${encodeURIComponent(callbackUrl)}`
+                : "/register"
+            }
+            className="text-blue-600 hover:underline"
+          >
+            {" "}
             Register
           </Link>
         </p>

@@ -1,9 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { sanitizeCallbackUrl } from "@/lib/callbackUrl";
 
-export default function RegisterPage() {
+function RegisterForm() {
+  const searchParams = useSearchParams();
+  const callbackUrl = sanitizeCallbackUrl(searchParams.get("callbackUrl"));
+  const loginHref = callbackUrl
+    ? `/login?callbackUrl=${encodeURIComponent(callbackUrl)}`
+    : "/login";
+
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -23,6 +31,7 @@ export default function RegisterPage() {
         name: formData.get("name"),
         email: formData.get("email"),
         password: formData.get("password"),
+        callbackUrl,
       }),
     });
 
@@ -51,7 +60,10 @@ export default function RegisterPage() {
             <span className="font-medium text-gray-800">{submittedEmail}</span>.
             Klik link di email itu untuk mengaktifkan akun kamu.
           </p>
-          <Link href="/login" className="text-blue-600 hover:underline text-sm">
+          <Link
+            href={loginHref}
+            className="text-blue-600 hover:underline text-sm"
+          >
             Kembali ke halaman login
           </Link>
         </div>
@@ -120,11 +132,19 @@ export default function RegisterPage() {
 
         <p className="mt-4 text-sm text-gray-600 text-center">
           Sudah punya akun?{" "}
-          <Link href="/login" className="text-blue-600 hover:underline">
+          <Link href={loginHref} className="text-blue-600 hover:underline">
             Login
           </Link>
         </p>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={null}>
+      <RegisterForm />
+    </Suspense>
   );
 }

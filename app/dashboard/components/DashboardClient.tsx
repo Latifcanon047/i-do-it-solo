@@ -11,6 +11,7 @@ interface MindMap {
   title: string;
   createdAt: Date;
   updatedAt: Date;
+  role: "OWNER" | "EDITOR" | "VIEWER";
 }
 
 interface Props {
@@ -21,6 +22,13 @@ interface Props {
     email?: string | null;
   };
 }
+
+const roleBadge: Record<MindMap["role"], { label: string; className: string }> =
+  {
+    OWNER: { label: "Owner", className: "bg-blue-50 text-blue-600" },
+    EDITOR: { label: "Editor", className: "bg-green-50 text-green-600" },
+    VIEWER: { label: "Viewer", className: "bg-gray-100 text-gray-600" },
+  };
 
 export default function DashboardClient({ mindMaps, user }: Props) {
   const router = useRouter();
@@ -102,9 +110,16 @@ export default function DashboardClient({ mindMaps, user }: Props) {
                 className="bg-white rounded-xl border hover:shadow-md transition cursor-pointer p-5"
                 onClick={() => router.push(`/editor/${map.id}`)}
               >
-                <h3 className="font-semibold text-gray-800 truncate">
-                  {map.title}
-                </h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-semibold text-gray-800 truncate">
+                    {map.title}
+                  </h3>
+                  <span
+                    className={`shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full ${roleBadge[map.role].className}`}
+                  >
+                    {roleBadge[map.role].label}
+                  </span>
+                </div>
                 <p className="text-xs text-gray-400 mt-1">
                   {new Date(map.updatedAt).toLocaleDateString("id-ID", {
                     day: "numeric",
@@ -112,26 +127,30 @@ export default function DashboardClient({ mindMaps, user }: Props) {
                     year: "numeric",
                   })}
                 </p>
-                <div className="flex gap-3 mt-4">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRename(map.id, map.title);
-                    }}
-                    className="text-xs text-blue-500 hover:underline"
-                  >
-                    Rename
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(map.id);
-                    }}
-                    className="text-xs text-red-500 hover:underline"
-                  >
-                    Hapus
-                  </button>
-                </div>
+                {map.role !== "VIEWER" && (
+                  <div className="flex gap-3 mt-4">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRename(map.id, map.title);
+                      }}
+                      className="text-xs text-blue-500 hover:underline"
+                    >
+                      Rename
+                    </button>
+                    {map.role === "OWNER" && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(map.id);
+                        }}
+                        className="text-xs text-red-500 hover:underline"
+                      >
+                        Hapus
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
