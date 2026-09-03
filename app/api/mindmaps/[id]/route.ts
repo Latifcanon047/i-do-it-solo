@@ -56,9 +56,15 @@ export async function PATCH(
   if (!canEdit(role))
     return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  const allowed: Record<string, unknown> = {};
+  if (typeof body.title === "string") allowed.title = body.title;
+  if (body.content !== undefined) allowed.content = body.content;
+  if (typeof body.canvasTheme === "string")
+    allowed.canvasTheme = body.canvasTheme;
+
   const mindMap = await prisma.mindMap.updateMany({
     where: { id },
-    data: body,
+    data: allowed,
   });
 
   return NextResponse.json(mindMap);

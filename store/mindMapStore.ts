@@ -8,7 +8,7 @@ import {
   type EdgeChange,
 } from "@xyflow/react";
 import type { DragDecision } from "@/app/editor/[id]/lib/dragEngine";
-import { buildChildrenMap } from "@/app/editor/[id]/lib/layout";
+import { buildChildrenMap } from "@/app/editor/[id]/lib/layoutEngine";
 import type { CanvasTheme } from "@/app/editor/[id]/lib/themes";
 
 export type SaveStatus = "idle" | "saving" | "saved";

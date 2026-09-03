@@ -17,6 +17,13 @@ export async function POST(req: Request) {
       );
     }
 
+    if (password.length < 8) {
+      return NextResponse.json(
+        { error: "Password minimal 8 karakter." },
+        { status: 400 },
+      );
+    }
+
     // Cek apakah email sudah jadi User beneran (sudah verified)
     const existingUser = await prisma.user.findUnique({
       where: { email },

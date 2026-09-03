@@ -121,14 +121,17 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
   useEffect(() => {
     if (data.editing) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- konsumsi command sekali-tembak dari parent (trigger edit mode), lalu reset flag di sistem eksternal (React Flow store)
       setEditing(true);
       updateNodeData(id, { editing: false });
     }
   }, [data.editing]);
 
-  useEffect(() => {
+  const [prevDataLabel, setPrevDataLabel] = useState(data.label as string);
+  if (data.label !== prevDataLabel) {
+    setPrevDataLabel(data.label as string);
     setLabel(data.label as string);
-  }, [data.label]);
+  }
 
   // Cek cache-hit: kalau gambar udah "complete" duluan pas mount, onLoad
   // gak bakal fire — trigger relayout manual di sini sebagai fallback.

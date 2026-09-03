@@ -28,23 +28,17 @@ export default function NodeContextMenu({
 }: NodeContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [insertOpen, setInsertOpen] = useState(false);
-  const [pos, setPos] = useState({ left: x, top: y });
-  const [submenuSide, setSubmenuSide] = useState<"right" | "left">("right");
-
-  // Clamp posisi menu utama supaya gak overflow keluar viewport
-  useEffect(() => {
-    const menuHeight = MENU_ITEM_HEIGHT * 3 + 8; // 3 item + padding vertikal
-    const maxLeft = window.innerWidth - MENU_WIDTH - 8;
-    const maxTop = window.innerHeight - menuHeight - 8;
-    const clampedLeft = Math.min(x, Math.max(8, maxLeft));
-    const clampedTop = Math.min(y, Math.max(8, maxTop));
-    setPos({ left: clampedLeft, top: clampedTop });
-
-    // Kalau menu utama ketempel deket kanan viewport, submenu buka ke kiri
-    const wouldOverflowRight =
-      clampedLeft + MENU_WIDTH + SUBMENU_WIDTH > window.innerWidth - 8;
-    setSubmenuSide(wouldOverflowRight ? "left" : "right");
-  }, [x, y]);
+  const menuHeight = MENU_ITEM_HEIGHT * 3 + 8; // 3 item + padding vertikal
+  const maxLeft = window.innerWidth - MENU_WIDTH - 8;
+  const maxTop = window.innerHeight - menuHeight - 8;
+  const pos = {
+    left: Math.min(x, Math.max(8, maxLeft)),
+    top: Math.min(y, Math.max(8, maxTop)),
+  };
+  const submenuSide: "right" | "left" =
+    pos.left + MENU_WIDTH + SUBMENU_WIDTH > window.innerWidth - 8
+      ? "left"
+      : "right";
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {

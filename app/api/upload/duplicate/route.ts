@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v2 as cloudinary } from "cloudinary";
 import { auth } from "@/auth";
-import prisma from "@/lib/prisma";
+import { getMindMapRole, canEdit } from "@/lib/permissions";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -25,11 +25,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const mindMap = await prisma.mindMap.findFirst({
-      where: { id: mindMapId, userId: session.user.id },
-      select: { id: true },
-    });
-    if (!mindMap) {
+    const role = await getMindMapRole(mindMapId, session.user.id);
+    if (!canEdit(role)) {
       return NextResponse.json(
         { error: "Mindmap tidak ditemukan." },
         { status: 404 },

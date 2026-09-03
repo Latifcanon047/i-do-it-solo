@@ -3,6 +3,7 @@ import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
 import prisma from "@/lib/prisma";
+import { convertPendingInvites } from "@/lib/invites";
 
 class EmailNotVerifiedError extends CredentialsSignin {
   code = "email_not_verified";
@@ -70,7 +71,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
       if (!existingUser) {
         // Belum pernah daftar sama sekali — bikin User baru
-        await prisma.user.create({
+        const newUser = await prisma.user.create({
           data: {
             name: user.name ?? user.email.split("@")[0],
             email: user.email,
@@ -78,6 +79,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             emailVerified: new Date(),
           },
         });
+
+        // Convert PendingInvite (kalau ada) — gagal di sini gak boleh
+        // gagalin proses login Google
+        try {
+          await convertPendingInvites(newUser.id, newUser.email);
+        } catch (err) {
+          console.error("Gagal convert pending invites (Google signIn):", err);
+        }
 
         return true;
       }

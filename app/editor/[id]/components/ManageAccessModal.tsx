@@ -84,8 +84,10 @@ export default function ManageAccessModal({ mindMapId, role, onClose }: Props) {
     },
     [mindMapId],
   );
+
   useEffect(() => {
     const controller = new AbortController();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetching effect (pola resmi React), setState di dalam fetchAccessList menyimpan hasil fetch dari server
     fetchAccessList(controller.signal);
     return () => controller.abort();
   }, [fetchAccessList]);

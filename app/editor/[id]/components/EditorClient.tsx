@@ -36,7 +36,7 @@ import {
   getDescendants,
   getAncestors,
   getHiddenNodeIds,
-} from "@/app/editor/[id]/lib/layout";
+} from "@/app/editor/[id]/lib/layoutEngine";
 import {
   hitTestDrag,
   decideDragAction,
@@ -740,9 +740,11 @@ function EditorCanvas({ mindMap, role }: Props) {
     return source.map((n) => ({ id: n.id, label: n.data.label as string }));
   }, [nodes, searchQuery]);
 
-  useEffect(() => {
+  const [prevSearchQuery, setPrevSearchQuery] = useState(searchQuery);
+  if (searchQuery !== prevSearchQuery) {
+    setPrevSearchQuery(searchQuery);
     setCurrentMatchIndex(-1);
-  }, [searchQuery]);
+  }
 
   function focusNode(nodeId: string) {
     const ancestors = getAncestors(nodeId, parentMap);
@@ -768,6 +770,7 @@ function EditorCanvas({ mindMap, role }: Props) {
     if (!pendingFocusId) return;
     if (hiddenNodeIds.has(pendingFocusId)) return;
     fitView({ nodes: [{ id: pendingFocusId }], duration: 600, maxZoom: 1.5 });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset trigger flag setelah manggil fitView (sistem eksternal), bukan derived state; refactor ke luar effect beresiko break timing fitView
     setPendingFocusId(null);
   }, [pendingFocusId, hiddenNodeIds, fitView]);
 

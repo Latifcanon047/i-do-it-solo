@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sanitizeCallbackUrl } from "@/lib/callbackUrl";
+import { convertPendingInvites } from "@/lib/invites";
 
 export async function GET(req: Request) {
   try {
@@ -32,7 +33,7 @@ export async function GET(req: Request) {
     }
 
     // Buat User beneran
-    await prisma.user.create({
+    const newUser = await prisma.user.create({
       data: {
         name: pending.name,
         email: pending.email,
@@ -40,6 +41,14 @@ export async function GET(req: Request) {
         emailVerified: new Date(),
       },
     });
+
+    // Convert PendingInvite (kalau ada) jadi akses langsung — gagal di sini
+    // gak boleh gagalin proses verifikasi user
+    try {
+      await convertPendingInvites(newUser.id, newUser.email);
+    } catch (err) {
+      console.error("Gagal convert pending invites (verify-email):", err);
+    }
 
     // Hapus PendingRegistration
     await prisma.pendingRegistration.delete({ where: { token } });

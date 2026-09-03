@@ -1,5 +1,14 @@
 import nodemailer from "nodemailer";
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -51,7 +60,7 @@ export async function sendInviteToExistingUserEmail(
     html: `
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
         <h2>Kamu Diberi Akses</h2>
-        <p>Kamu ditambahkan sebagai <strong>${role}</strong> di mindmap "<strong>${mindMapTitle}</strong>".</p>
+        <p>Kamu ditambahkan sebagai <strong>${role}</strong> di mindmap "<strong>${escapeHtml(mindMapTitle)}</strong>".</p>
         <a href="${openUrl}" style="display: inline-block; padding: 12px 24px; background: #1f6feb; color: #fff; text-decoration: none; border-radius: 6px; margin: 16px 0;">
           Buka Mindmap
         </a>
@@ -72,11 +81,11 @@ export async function sendInviteToNewUserEmail(
   await transporter.sendMail({
     from: `"MyMind" <${process.env.SMTP_USER}>`,
     to,
-    subject: `Kamu diundang ke mindmap "${mindMapTitle}" — MyMind`,
+    subject: `Kamu ditambahkan ke mindmap "${mindMapTitle}" — MyMind`,
     html: `
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-        <h2>Kamu Diundang</h2>
-        <p>Kamu diundang sebagai <strong>${role}</strong> di mindmap "<strong>${mindMapTitle}</strong>".</p>
+        <h2>Kamu Diberi Akses</h2>
+        <p>Kamu ditambahkan sebagai <strong>${role}</strong> di mindmap "<strong>${escapeHtml(mindMapTitle)}</strong>".</p>
         <p>Kamu belum terdaftar di MyMind. Klik tombol di bawah, daftar/login pakai email <strong>${to}</strong> ini (harus sama persis) supaya otomatis dapat akses:</p>
         <a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; background: #1f6feb; color: #fff; text-decoration: none; border-radius: 6px; margin: 16px 0;">
           Terima Undangan
