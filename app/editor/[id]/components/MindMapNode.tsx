@@ -68,6 +68,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   const isRoot = !!data.isRoot;
   const isGhost = !!data.isGhost;
   const isDirectChildOfRoot = !!data.isDirectChildOfRoot;
+  const canEdit = data.canEdit !== false; // default true kalau prop belum di-pass (misal ghost node)
   const onAddChild = data.onAddChild as ((nodeId: string) => void) | undefined;
   const onAddSibling = data.onAddSibling as
     | ((nodeId: string) => void)
@@ -158,6 +159,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   }
 
   function handleDoubleClick() {
+    if (!canEdit) return;
     setEditing(true);
   }
 
@@ -343,9 +345,14 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
       {nodeVisuallyFocused && !collapsed && (
         <button
-          onClick={handleAddChild}
+          onClick={canEdit ? handleAddChild : undefined}
           onMouseDown={(e) => e.stopPropagation()}
-          className="absolute -right-6 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-blue-500 border border-blue-600 shadow flex items-center justify-center text-white hover:bg-blue-600 z-10"
+          disabled={!canEdit}
+          className={`absolute -right-6 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border shadow flex items-center justify-center text-white z-10 ${
+            canEdit
+              ? "bg-blue-500 border-blue-600 hover:bg-blue-600"
+              : "bg-blue-500/40 border-blue-600/40 cursor-not-allowed"
+          }`}
           title="Tambah child node (Tab)"
         >
           <Plus size={10} />
@@ -354,9 +361,14 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
       {nodeVisuallyFocused && !isRoot && (
         <button
-          onClick={handleAddSibling}
+          onClick={canEdit ? handleAddSibling : undefined}
           onMouseDown={(e) => e.stopPropagation()}
-          className="absolute -bottom-6 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-blue-500 border border-blue-600 shadow flex items-center justify-center text-white hover:bg-blue-600 z-10"
+          disabled={!canEdit}
+          className={`absolute -bottom-6 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full border shadow flex items-center justify-center text-white z-10 ${
+            canEdit
+              ? "bg-blue-500 border-blue-600 hover:bg-blue-600"
+              : "bg-blue-500/40 border-blue-600/40 cursor-not-allowed"
+          }`}
           title="Tambah sibling node (Enter)"
         >
           <Plus size={10} />

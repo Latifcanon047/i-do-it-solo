@@ -11,6 +11,7 @@ interface NodeContextMenuProps {
   onCopy: () => void;
   onPaste: () => void;
   pasteDisabled: boolean;
+  canEdit: boolean;
 }
 
 const MENU_WIDTH = 192; // w-48
@@ -25,6 +26,7 @@ export default function NodeContextMenu({
   onCopy,
   onPaste,
   pasteDisabled,
+  canEdit,
 }: NodeContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [insertOpen, setInsertOpen] = useState(false);
@@ -66,12 +68,15 @@ export default function NodeContextMenu({
     >
       <div
         className="relative"
-        onMouseEnter={() => setInsertOpen(true)}
+        onMouseEnter={() => canEdit && setInsertOpen(true)}
         onMouseLeave={() => setInsertOpen(false)}
       >
         <button
-          className="flex w-full items-center justify-between px-3 py-1.5 text-slate-200 hover:bg-slate-800"
+          className={`flex w-full items-center justify-between px-3 py-1.5 text-slate-200 ${
+            canEdit ? "hover:bg-slate-800" : "opacity-40 cursor-not-allowed"
+          }`}
           type="button"
+          disabled={!canEdit}
         >
           <span>Insert</span>
           <ChevronRight size={14} />
@@ -113,9 +118,9 @@ export default function NodeContextMenu({
       <button
         className="flex w-full items-center gap-2 px-3 py-1.5 text-slate-200 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
         type="button"
-        disabled={pasteDisabled}
+        disabled={pasteDisabled || !canEdit}
         onClick={() => {
-          if (pasteDisabled) return;
+          if (pasteDisabled || !canEdit) return;
           onPaste();
           onClose();
         }}

@@ -186,7 +186,8 @@ function EditorCanvas({ mindMap, role }: Props) {
   const { zoom } = useViewport();
   const canvasTheme = useMindMapStore((s) => s.canvasTheme);
   const setCanvasTheme = useMindMapStore((s) => s.setCanvasTheme);
-  const { pushTheme } = useThemeSync(canvasTheme, setCanvasTheme);
+  const canEdit = role !== "VIEWER";
+  const { pushTheme } = useThemeSync(canvasTheme, setCanvasTheme, role);
   const theme = THEMES[canvasTheme];
   const [miniMapOpen, setMiniMapOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -380,10 +381,11 @@ function EditorCanvas({ mindMap, role }: Props) {
 
   const handleAddChild = useCallback(
     (nodeId: string) => {
+      if (!canEdit) return;
       const newId = addChild(nodeId);
       if (newId) requestAnimationFrame(() => runLayout(newId));
     },
-    [addChild],
+    [addChild, canEdit],
   );
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     useMindMapStore.setState((state) => ({
@@ -456,10 +458,11 @@ function EditorCanvas({ mindMap, role }: Props) {
 
   const handleAddSibling = useCallback(
     (nodeId: string) => {
+      if (!canEdit) return;
       const newId = addSibling(nodeId);
       if (newId) requestAnimationFrame(() => runLayout(newId));
     },
-    [addSibling],
+    [addSibling, canEdit],
   );
 
   function runLayout(focusNodeId?: string) {
@@ -581,6 +584,7 @@ function EditorCanvas({ mindMap, role }: Props) {
   }, [structureSignature]);
 
   function onNodeDragStart(_: MouseEvent | TouchEvent, node: Node) {
+    if (!canEdit) return;
     if (node.data?.isRoot) return;
     dragOriginRef.current = { id: node.id, position: { ...node.position } };
     previousTargetRef.current = null;
@@ -598,6 +602,7 @@ function EditorCanvas({ mindMap, role }: Props) {
   }
 
   function onNodeDrag(e: MouseEvent | TouchEvent, node: Node) {
+    if (!canEdit) return;
     if (node.data?.isRoot) return;
 
     // Update posisi mouse
@@ -652,6 +657,7 @@ function EditorCanvas({ mindMap, role }: Props) {
   }
 
   function onNodeDragStop(_: MouseEvent | TouchEvent, node: Node) {
+    if (!canEdit) return;
     if (node.data?.isRoot) return;
 
     // Clear shadow
@@ -965,7 +971,7 @@ function EditorCanvas({ mindMap, role }: Props) {
       return {
         ...n,
         hidden: hiddenNodeIds.has(n.id),
-        draggable: !n.data?.isRoot,
+        draggable: !n.data?.isRoot && canEdit,
         style: draggingNodeId === n.id ? { opacity: 0.3 } : undefined,
         data: {
           ...n.data,
@@ -982,6 +988,7 @@ function EditorCanvas({ mindMap, role }: Props) {
           onLabelChange: updateNodeLabel,
           onToggleCollapse: handleToggleCollapse,
           canvasTheme: canvasTheme,
+          canEdit,
         },
       };
     });
@@ -997,6 +1004,7 @@ function EditorCanvas({ mindMap, role }: Props) {
     handleImageSettled,
     handleImageSettled,
     theme,
+    canEdit,
   ]);
 
   const displayEdges = useMemo(() => {
@@ -1045,12 +1053,14 @@ function EditorCanvas({ mindMap, role }: Props) {
       const isCtrlOrCmd = e.ctrlKey || e.metaKey;
 
       if (isCtrlOrCmd && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        if (!canEdit) return;
         if (e.repeat) return;
         e.preventDefault();
         undo();
         return;
       }
       if (isCtrlOrCmd && e.key.toLowerCase() === "z" && e.shiftKey) {
+        if (!canEdit) return;
         if (e.repeat) return;
         e.preventDefault();
         redo();
@@ -1068,6 +1078,7 @@ function EditorCanvas({ mindMap, role }: Props) {
       }
 
       if (isCtrlOrCmd && e.key.toLowerCase() === "v") {
+        if (!canEdit) return;
         if (focusedImageNodeId) return;
         const { clipboard, nodes: latestNodes } = useMindMapStore.getState();
         if (!clipboard) return;
@@ -1096,6 +1107,7 @@ function EditorCanvas({ mindMap, role }: Props) {
       }
 
       if (e.key === "Delete" || e.key === "Backspace") {
+        if (!canEdit) return;
         const { nodes: latestNodes } = useMindMapStore.getState();
         const selected = latestNodes.filter((n) => n.selected);
         if (selected.length === 0) return;
@@ -1151,6 +1163,7 @@ function EditorCanvas({ mindMap, role }: Props) {
       }
 
       if (e.key === "Enter") {
+        if (!canEdit) return;
         if (focusedImageNodeId || e.repeat) return;
         e.preventDefault();
         const { nodes: latestNodes } = useMindMapStore.getState();
@@ -1186,6 +1199,7 @@ function EditorCanvas({ mindMap, role }: Props) {
       }
 
       if (e.key === "Tab") {
+        if (!canEdit) return;
         if (focusedImageNodeId || e.repeat) return;
         e.preventDefault();
         const { nodes: latestNodes } = useMindMapStore.getState();
@@ -1220,6 +1234,7 @@ function EditorCanvas({ mindMap, role }: Props) {
       }
 
       if (e.key === " ") {
+        if (!canEdit) return;
         if (focusedImageNodeId) return;
         const { nodes: latestNodes } = useMindMapStore.getState(); // ← fresh
         const selected = latestNodes.find((n) => n.selected) ?? null;
@@ -1302,6 +1317,7 @@ function EditorCanvas({ mindMap, role }: Props) {
     copyNode,
     pasteNode,
     selectAll,
+    canEdit,
   ]);
 
   return (
@@ -1318,6 +1334,7 @@ function EditorCanvas({ mindMap, role }: Props) {
         onManageAccessClick={() => {
           setManageAccessOpen((v) => !v);
         }}
+        canEdit={canEdit}
       />
 
       {searchOpen && (
@@ -1351,6 +1368,7 @@ function EditorCanvas({ mindMap, role }: Props) {
           onCopy={handleCopyFromContextMenu}
           onPaste={handlePasteFromContextMenu}
           pasteDisabled={clipboard === null}
+          canEdit={canEdit}
         />
       )}
       <div
@@ -1581,6 +1599,7 @@ function EditorCanvas({ mindMap, role }: Props) {
           <StyleSidebar
             selectedNode={selectedNode}
             onClose={() => setStylePanelOpen(false)}
+            canEdit={canEdit}
           />
         )}
       </div>

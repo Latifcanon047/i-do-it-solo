@@ -30,9 +30,14 @@ const PRESET_BORDERS = [
 interface Props {
   selectedNode: Node | null;
   onClose: () => void;
+  canEdit: boolean;
 }
 
-export default function StyleSidebar({ selectedNode, onClose }: Props) {
+export default function StyleSidebar({
+  selectedNode,
+  onClose,
+  canEdit,
+}: Props) {
   const updateNodeStyle = useMindMapStore((s) => s.updateNodeStyle);
   const hasSelection = !!selectedNode;
   const bgColor = (selectedNode?.data?.bgColor as string) || "#FFFFFF";

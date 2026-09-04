@@ -25,14 +25,19 @@ export async function POST(req: Request) {
     }
 
     // Cek apakah email sudah jadi User beneran (sudah verified)
+    // Cek apakah email sudah jadi User beneran (sudah verified)
     const existingUser = await prisma.user.findUnique({
       where: { email },
     });
 
     if (existingUser) {
+      // Sengaja gak bocorin bahwa email ini sudah terdaftar (cegah email
+      // enumeration) — balikin response sukses generik yang sama persis
+      // seperti kalau proses registrasi beneran berjalan, tapi skip semua
+      // proses (gak upsert PendingRegistration, gak kirim email apapun).
       return NextResponse.json(
-        { error: "Email sudah terdaftar." },
-        { status: 409 },
+        { message: "Berhasil. Cek email kamu untuk verifikasi." },
+        { status: 201 },
       );
     }
 

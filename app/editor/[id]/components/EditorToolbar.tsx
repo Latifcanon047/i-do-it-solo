@@ -24,6 +24,7 @@ interface Props {
   canvasTheme: CanvasTheme;
   onThemeChange: (theme: CanvasTheme) => void;
   onManageAccessClick: () => void;
+  canEdit: boolean;
 }
 
 const THEME_OPTIONS: {
@@ -48,6 +49,7 @@ export default function EditorToolbar({
   canvasTheme,
   onThemeChange,
   onManageAccessClick,
+  canEdit,
 }: Props) {
   return (
     <div className="bg-white border-b px-4 py-2 flex items-center gap-3">
@@ -87,9 +89,12 @@ export default function EditorToolbar({
         {THEME_OPTIONS.map((opt) => (
           <button
             key={opt.value}
-            onClick={() => onThemeChange(opt.value)}
+            onClick={() => canEdit && onThemeChange(opt.value)}
+            disabled={!canEdit}
             title={opt.label}
             className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition ${
+              !canEdit ? "opacity-40 cursor-not-allowed" : ""
+            } ${
               canvasTheme === opt.value
                 ? "bg-white text-gray-800 shadow-sm"
                 : "text-gray-500 hover:text-gray-700"
@@ -110,8 +115,11 @@ export default function EditorToolbar({
       </button>
 
       <button
-        onClick={onStyleClick}
+        onClick={() => canEdit && onStyleClick()}
+        disabled={!canEdit}
         className={`p-1.5 rounded-lg transition ${
+          !canEdit ? "opacity-40 cursor-not-allowed" : ""
+        } ${
           styleOpen
             ? "bg-blue-100 text-blue-600"
             : "text-gray-500 hover:bg-gray-100"

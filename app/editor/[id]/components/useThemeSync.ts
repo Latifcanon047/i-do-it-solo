@@ -12,6 +12,7 @@ import type { CanvasTheme } from "@/app/editor/[id]/lib/themes";
 export function useThemeSync(
   canvasTheme: CanvasTheme,
   setCanvasTheme: (theme: CanvasTheme) => void,
+  role: "OWNER" | "EDITOR" | "VIEWER",
 ) {
   const room = useRoom();
   const remoteTheme = useStorage((root) => root.theme);
@@ -26,6 +27,7 @@ export function useThemeSync(
 
   // OUTBOUND: Zustand -> Liveblocks Storage (dipanggil manual dari handleThemeChange)
   function pushTheme(theme: CanvasTheme) {
+    if (role === "VIEWER") return; // VIEWER read-only — room permission gak izinin write
     const snapshot = room.getStorageSnapshot();
     if (!snapshot || !("set" in snapshot)) return;
     snapshot.set("theme", theme);
