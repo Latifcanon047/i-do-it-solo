@@ -28,7 +28,11 @@ import ManageAccessModal from "./ManageAccessModal";
 import CollabRoomProvider from "./CollabRoomProvider";
 import { useLiveblocksSync } from "./useLiveblocksSync";
 import LiveCursors, { usePublishCursor } from "./LiveCursors";
-import { useMindMapStore, type DropZone } from "@/store/mindMapStore";
+import {
+  useMindMapStore,
+  type DropZone,
+  type HistoryEntry,
+} from "@/store/mindMapStore";
 import {
   layoutForest,
   buildChildrenMap,
@@ -106,6 +110,29 @@ function compressImage(file: File): Promise<File> {
   });
 }
 
+function isPublicIdInHistory(
+  publicId: string,
+  entries: HistoryEntry[],
+): boolean {
+  for (const entry of entries) {
+    for (const op of entry.ops) {
+      if (op.kind !== "node") continue;
+      if (op.type === "update") {
+        const beforeId = (op.before.data as Record<string, unknown> | undefined)
+          ?.imagePublicId;
+        const afterId = (op.after.data as Record<string, unknown> | undefined)
+          ?.imagePublicId;
+        if (beforeId === publicId || afterId === publicId) return true;
+      } else {
+        const nodeId = (op.node.data as Record<string, unknown> | undefined)
+          ?.imagePublicId;
+        if (nodeId === publicId) return true;
+      }
+    }
+  }
+  return false;
+}
+
 export default function EditorClient({ mindMap, role }: Props) {
   const content = mindMap.content as { nodes: Node[]; edges: Edge[] };
 
@@ -140,6 +167,8 @@ function EditorCanvas({ mindMap, role }: Props) {
   const setNodeImage = useMindMapStore((s) => s.setNodeImage);
   const removeNodeImage = useMindMapStore((s) => s.removeNodeImage);
   const setNodeImageUploading = useMindMapStore((s) => s.setNodeImageUploading);
+  const past = useMindMapStore((s) => s.past);
+  const future = useMindMapStore((s) => s.future);
 
   const saveTimeout = useRef<NodeJS.Timeout | null>(null);
   const isFirstRender = useRef(true);
@@ -238,6 +267,43 @@ function EditorCanvas({ mindMap, role }: Props) {
 
   const clipboard = useMindMapStore((s) => s.clipboard);
 
+  const pendingImageDeletesRef = useRef<Set<string>>(new Set());
+
+  const deletePublicIdFromCloudinary = useCallback((publicId: string) => {
+    fetch("/api/upload", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ publicId }),
+    }).catch((err) => console.error("Hapus gambar gagal:", err));
+  }, []);
+
+  const scheduleImageDelete = useCallback((publicId: string) => {
+    pendingImageDeletesRef.current.add(publicId);
+  }, []);
+
+  // Cuma hapus beneran ke Cloudinary kalau publicId udah gak reachable lewat
+  // undo (past) maupun redo (future) — bukan estimasi waktu (setTimeout).
+  // Efek ini re-check tiap kali history berubah (commit baru, undo, redo,
+  // atau MAX_HISTORY eviction).
+  useEffect(() => {
+    const pending = pendingImageDeletesRef.current;
+    for (const publicId of Array.from(pending)) {
+      const isCurrentlyUsed = nodes.some(
+        (n) =>
+          (n.data as Record<string, unknown> | undefined)?.imagePublicId ===
+          publicId,
+      );
+      const stillReachable =
+        isCurrentlyUsed ||
+        isPublicIdInHistory(publicId, past) ||
+        isPublicIdInHistory(publicId, future);
+      if (!stillReachable) {
+        pending.delete(publicId);
+        deletePublicIdFromCloudinary(publicId);
+      }
+    }
+  }, [nodes, past, future, deletePublicIdFromCloudinary]);
+
   const handleImageFileChange = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -284,14 +350,10 @@ function EditorCanvas({ mindMap, role }: Props) {
 
         setNodeImage(nodeId, data.url, data.publicId);
 
-        // Gambar baru udah sukses dipasang — cleanup gambar lama di Cloudinary
-        // (fire-and-forget, gak perlu blocking UI)
+        // Gambar baru udah sukses dipasang — jadwalkan cleanup gambar lama,
+        // baru beneran dihapus kalau udah gak reachable lewat undo/redo.
         if (oldPublicId && oldPublicId !== data.publicId) {
-          fetch("/api/upload", {
-            method: "DELETE",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ publicId: oldPublicId }),
-          }).catch((err) => console.error("Hapus gambar lama gagal:", err));
+          scheduleImageDelete(oldPublicId);
         }
       } catch (err) {
         console.error("Upload gambar gagal:", err);
@@ -309,34 +371,27 @@ function EditorCanvas({ mindMap, role }: Props) {
       const publicId = node?.data?.imagePublicId as string | undefined;
       if (!publicId) return;
 
-      // jalan di background (fire-and-forget)
       removeNodeImage(nodeId);
-
-      fetch("/api/upload", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ publicId }),
-      }).catch((err) => console.error("Hapus gambar gagal:", err));
+      scheduleImageDelete(publicId);
     },
-    [removeNodeImage],
+    [removeNodeImage, scheduleImageDelete],
   );
 
   // Fire-and-forget cleanup Cloudinary untuk banyak node sekaligus (dipakai
   // saat delete node yang punya descendant dengan gambar). Gak menyentuh
   // store karena node-nya toh langsung dihapus oleh deleteSelected().
-  const cleanupImagesForNodes = useCallback((nodeIds: string[]) => {
-    const { nodes: latestNodes } = useMindMapStore.getState();
-    for (const id of nodeIds) {
-      const node = latestNodes.find((n) => n.id === id);
-      const publicId = node?.data?.imagePublicId as string | undefined;
-      if (!publicId) continue;
-      fetch("/api/upload", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ publicId }),
-      }).catch((err) => console.error("Hapus gambar (cascade) gagal:", err));
-    }
-  }, []);
+  const cleanupImagesForNodes = useCallback(
+    (nodeIds: string[]) => {
+      const { nodes: latestNodes } = useMindMapStore.getState();
+      for (const id of nodeIds) {
+        const node = latestNodes.find((n) => n.id === id);
+        const publicId = node?.data?.imagePublicId as string | undefined;
+        if (!publicId) continue;
+        scheduleImageDelete(publicId);
+      }
+    },
+    [scheduleImageDelete],
+  );
 
   const handleImageFocus = useCallback((nodeId: string) => {
     useMindMapStore.setState((state) => ({

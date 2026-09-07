@@ -97,7 +97,7 @@ export interface ClipboardSubtreeNode {
   children: ClipboardSubtreeNode[];
 }
 
-type NodeOp =
+export type NodeOp =
   | { kind: "node"; type: "add"; node: Node }
   | { kind: "node"; type: "remove"; node: Node }
   | {
@@ -108,13 +108,13 @@ type NodeOp =
       after: Partial<Node>;
     };
 
-type EdgeOp =
+export type EdgeOp =
   | { kind: "edge"; type: "add"; edge: Edge; afterId: string | null }
   | { kind: "edge"; type: "remove"; edge: Edge; afterId: string | null };
 
-type HistoryOp = NodeOp | EdgeOp;
+export type HistoryOp = NodeOp | EdgeOp;
 
-interface HistoryEntry {
+export interface HistoryEntry {
   ops: HistoryOp[];
 }
 
