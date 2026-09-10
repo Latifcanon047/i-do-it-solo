@@ -26,7 +26,7 @@ export default function CollabRoomProvider({
   return (
     <RoomProvider
       id={mindMapId}
-      initialPresence={{ cursor: null }}
+      initialPresence={{ cursor: null, selectedNodeIds: [], lock: null }}
       initialStorage={{
         nodes: new LiveMap(
           initialNodes.map((n) => [n.id, new LiveObject(toStorageNode(n))]),

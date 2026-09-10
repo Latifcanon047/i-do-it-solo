@@ -205,6 +205,8 @@ interface MindMapStore {
   _pendingRemovals: { nodeIds: string[]; edgeIds: string[] };
   _recordRemovals: (nodeIds: string[], edgeIds: string[]) => void;
   consumePendingRemovals: () => { nodeIds: string[]; edgeIds: string[] };
+  _pendingAdditions: Set<string>;
+  _recordAdditions: (nodeIds: string[]) => void;
   commitHistory: () => void;
   undo: () => void;
   redo: () => void;
@@ -252,10 +254,27 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
   future: [],
   _pendingOps: [],
   _pendingRemovals: { nodeIds: [], edgeIds: [] },
+  _pendingAdditions: new Set(),
 
   _recordOps: (ops) => {
     if (ops.length === 0) return;
-    set((state) => ({ _pendingOps: [...state._pendingOps, ...ops] }));
+    // Fix Bug (Sesi 31): tiap ops yang bawa node "add" otomatis kecatat
+    // sebagai pending — biar inbound sync (Liveblocks) gak nganggep node
+    // ini "belum ada di Storage jadi harus dibuang" padahal cuma belum
+    // sempat ke-push (masih ketunda debounce outbound).
+    const addedNodeIds = ops
+      .filter(
+        (op): op is Extract<HistoryOp, { kind: "node"; type: "add" }> =>
+          op.kind === "node" && op.type === "add",
+      )
+      .map((op) => op.node.id);
+    set((state) => ({
+      _pendingOps: [...state._pendingOps, ...ops],
+      _pendingAdditions:
+        addedNodeIds.length > 0
+          ? new Set([...state._pendingAdditions, ...addedNodeIds])
+          : state._pendingAdditions,
+    }));
   },
 
   _recordRemovals: (nodeIds, edgeIds) => {
@@ -265,6 +284,13 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         nodeIds: [...state._pendingRemovals.nodeIds, ...nodeIds],
         edgeIds: [...state._pendingRemovals.edgeIds, ...edgeIds],
       },
+    }));
+  },
+
+  _recordAdditions: (nodeIds) => {
+    if (nodeIds.length === 0) return;
+    set((state) => ({
+      _pendingAdditions: new Set([...state._pendingAdditions, ...nodeIds]),
     }));
   },
 
@@ -331,10 +357,21 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       .filter((e) => !sanitizedIds.has(e.id))
       .map((e) => e.id);
 
+    // Fix Bug (Sesi 31): node yang balik muncul gara-gara undo delete
+    // juga "baru" buat Storage — perlu diproteksi sama kayak node hasil
+    // addChild/addSibling/paste.
+    const reAddedNodeIds = entry.ops
+      .filter(
+        (op): op is Extract<HistoryOp, { kind: "node"; type: "remove" }> =>
+          op.kind === "node" && op.type === "remove",
+      )
+      .map((op) => op.node.id);
+
     get()._recordRemovals(removedNodeIds, [
       ...removedEdgeIds,
       ...strippedEdgeIds,
     ]);
+    if (reAddedNodeIds.length > 0) get()._recordAdditions(reAddedNodeIds);
 
     set({
       past: newPast,
@@ -379,10 +416,20 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       .filter((e) => !sanitizedIds.has(e.id))
       .map((e) => e.id);
 
+    // Fix Bug (Sesi 31): node yang muncul gara-gara redo add juga "baru"
+    // buat Storage.
+    const addedNodeIds = entry.ops
+      .filter(
+        (op): op is Extract<HistoryOp, { kind: "node"; type: "add" }> =>
+          op.kind === "node" && op.type === "add",
+      )
+      .map((op) => op.node.id);
+
     get()._recordRemovals(removedNodeIds, [
       ...removedEdgeIds,
       ...strippedEdgeIds,
     ]);
+    if (addedNodeIds.length > 0) get()._recordAdditions(addedNodeIds);
 
     set({
       past: [...past, entry],
@@ -403,6 +450,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       future: [],
       _pendingOps: [],
       _pendingRemovals: { nodeIds: [], edgeIds: [] },
+      _pendingAdditions: new Set(),
     });
   },
 
@@ -1050,13 +1098,6 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const currentNodesMap = new Map(get().nodes.map((n) => [n.id, n]));
     const mergedNodes = nodes.map((n) => {
       const existing = currentNodesMap.get(n.id);
-      // Kalau data-nya beneran berubah dari remote (referensi beda —
-      // misal label/style diedit tab lain), measured lama yang kita
-      // preserve di atas bisa jadi sedikit gak akurat (ukuran box lama,
-      // padahal isinya baru). Tandain needsLayout: true supaya
-      // handleNodesChange (jalur yang sama dipakai updateNodeLabel/
-      // setNodeImage) otomatis relayout ulang begitu React Flow selesai
-      // re-measure ukuran barunya — bukan nunggu aksi struktural lain.
       const dataChanged = existing && existing.data !== n.data;
       return {
         ...n,
@@ -1065,6 +1106,68 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         data: dataChanged ? { ...n.data, needsLayout: true } : n.data,
       };
     });
-    set({ nodes: mergedNodes, edges: sanitizeEdges(mergedNodes, edges) });
+
+    // Fix Bug (Sesi 31): jangan REPLACE total pakai data remote. Node yang
+    // masih "pending" (baru ditambah lokal — addChild/addSibling/paste/
+    // undo-redo — tapi belum sempat ke-push ke Storage lewat outbound yang
+    // di-debounce 300ms) HARUS dipertahanin, bukan ikut kebuang cuma
+    // karena belum nongol di snapshot remote ini. Union, bukan replace.
+    const remoteNodeIds = new Set(nodes.map((n) => n.id));
+    const { _pendingAdditions } = get();
+    const preservedNodes = get().nodes.filter(
+      (n) => _pendingAdditions.has(n.id) && !remoteNodeIds.has(n.id),
+    );
+    const finalNodes = [...mergedNodes, ...preservedNodes];
+
+    // Fix Bug (Sesi 31, revisi): edge PALING GAK BOLEH cuma ditempel di
+    // belakang kayak node — urutan edge itu yang nentuin urutan SIBLING di
+    // layout (buildChildrenMap baca edges array apa adanya, urutan insert
+    // = urutan child). Kalau edge pending (misal hasil addSibling di
+    // tengah-tengah) ditempel di ujung array, dia keitung "anak terakhir"
+    // pas relayout — ini penyebab gejala "node baru meloncat ke bawah" /
+    // layout berantakan. Fix: sisipkan edge pending PERSIS di posisi
+    // relatif yang sama kayak susunan lokal sebelumnya (nempel tepat
+    // setelah edge confirmed terdekat sebelumnya di array lokal), bukan
+    // asal nempel di akhir.
+    const localEdges = get().edges;
+    const remoteEdgeIds = new Set(edges.map((e) => e.id));
+    const pendingEdgeIds = new Set(
+      localEdges
+        .filter(
+          (e) =>
+            !remoteEdgeIds.has(e.id) &&
+            (_pendingAdditions.has(e.source) ||
+              _pendingAdditions.has(e.target)),
+        )
+        .map((e) => e.id),
+    );
+
+    const finalEdges = [...edges];
+    let anchorEdgeId: string | null = null;
+    for (const localEdge of localEdges) {
+      if (remoteEdgeIds.has(localEdge.id)) {
+        anchorEdgeId = localEdge.id;
+        continue;
+      }
+      if (pendingEdgeIds.has(localEdge.id)) {
+        const insertIdx = anchorEdgeId
+          ? finalEdges.findIndex((e) => e.id === anchorEdgeId) + 1
+          : 0;
+        finalEdges.splice(insertIdx, 0, localEdge);
+        anchorEdgeId = localEdge.id;
+      }
+    }
+
+    // Self-cleaning: id yang udah nongol di remote (berarti outbound-nya
+    // udah sukses ke-push) otomatis dicoret dari buffer pending.
+    const stillPending = new Set(
+      Array.from(_pendingAdditions).filter((id) => !remoteNodeIds.has(id)),
+    );
+
+    set({
+      nodes: finalNodes,
+      edges: sanitizeEdges(finalNodes, finalEdges),
+      _pendingAdditions: stillPending,
+    });
   },
 }));

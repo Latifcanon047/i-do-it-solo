@@ -10,6 +10,8 @@ const client = createClient({
 // Presence type — data live tiap user di room (cursor, dll). Diisi detailnya di Fase 3.
 type Presence = {
   cursor: { x: number; y: number } | null;
+  selectedNodeIds: string[];
+  lock: { nodeId: string; mode: "edit" | "drag" } | null;
 };
 
 export type StorageNode = {

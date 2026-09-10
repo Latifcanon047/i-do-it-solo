@@ -28,6 +28,7 @@ import ManageAccessModal from "./ManageAccessModal";
 import CollabRoomProvider from "./CollabRoomProvider";
 import { useLiveblocksSync } from "./useLiveblocksSync";
 import LiveCursors, { usePublishCursor } from "./LiveCursors";
+import { useMyPresence, useOthers } from "@/liveblocks.config";
 import {
   useMindMapStore,
   type DropZone,
@@ -182,6 +183,125 @@ function EditorCanvas({ mindMap, role }: Props) {
     onPointerLeave: onCursorPointerLeave,
   } = usePublishCursor();
   useLiveblocksSync(nodes, edges, applyRemoteUpdate, role);
+  // ===== PRESENCE: publish selection + derive "siapa lagi fokus ke node mana" =====
+  const [, updateMyPresence] = useMyPresence();
+  const others = useOthers();
+
+  const mySelectedNodeIds = useMemo(
+    () => nodes.filter((n) => n.selected).map((n) => n.id),
+    [nodes],
+  );
+  const mySelectedSignature = mySelectedNodeIds.join(",");
+
+  useEffect(() => {
+    updateMyPresence({ selectedNodeIds: mySelectedNodeIds });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mySelectedSignature]);
+
+  // Lacak siapa yang PALING BARU nge-select tiap node (bukan cuma snapshot
+  // "siapa aja yang lagi select sekarang") — biar kalau 1 node keselect
+  // bareng 2+ collaborator, warna yang ditampilin cuma punya yang paling
+  // baru mulai nge-select node itu.
+  const othersSelectionRef = useRef<Map<number, string[]>>(new Map());
+  const nodeOwnerRef = useRef<
+    Map<string, { connectionId: number; ts: number }>
+  >(new Map());
+  const [nodeOwnerVersion, setNodeOwnerVersion] = useState(0);
+
+  useEffect(() => {
+    const prevMap = othersSelectionRef.current;
+    const ownerMap = nodeOwnerRef.current;
+    const currentConnIds = new Set<number>();
+    let changed = false;
+
+    for (const other of others) {
+      currentConnIds.add(other.connectionId);
+      const prevIds = prevMap.get(other.connectionId) ?? [];
+      const currentIds = other.presence.selectedNodeIds ?? [];
+      const prevSet = new Set(prevIds);
+      const currentSet = new Set(currentIds);
+
+      for (const nodeId of currentIds) {
+        if (!prevSet.has(nodeId)) {
+          ownerMap.set(nodeId, {
+            connectionId: other.connectionId,
+            ts: Date.now(),
+          });
+          changed = true;
+        }
+      }
+      for (const nodeId of prevIds) {
+        if (!currentSet.has(nodeId)) {
+          const owner = ownerMap.get(nodeId);
+          if (owner && owner.connectionId === other.connectionId) {
+            ownerMap.delete(nodeId);
+            changed = true;
+          }
+        }
+      }
+      prevMap.set(other.connectionId, currentIds);
+    }
+
+    // User yang disconnect: bersihin jejak selection & ownership-nya
+    for (const connId of Array.from(prevMap.keys())) {
+      if (!currentConnIds.has(connId)) {
+        prevMap.delete(connId);
+        for (const [nodeId, owner] of Array.from(ownerMap.entries())) {
+          if (owner.connectionId === connId) {
+            ownerMap.delete(nodeId);
+            changed = true;
+          }
+        }
+      }
+    }
+
+    if (changed) setNodeOwnerVersion((v) => v + 1);
+  }, [others]);
+
+  const othersFocusMap = useMemo(() => {
+    const map = new Map<string, { color: string; name: string }>();
+    for (const [nodeId, owner] of nodeOwnerRef.current.entries()) {
+      const owningUser = others.find(
+        (o) => o.connectionId === owner.connectionId,
+      );
+      if (owningUser?.info) {
+        map.set(nodeId, {
+          color: owningUser.info.color,
+          name: owningUser.info.name,
+        });
+      }
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [others, nodeOwnerVersion]);
+
+  // ----- Edit-lock: publish & consume -----
+  const handleEditingChange = useCallback(
+    (nodeId: string, isEditing: boolean) => {
+      updateMyPresence({ lock: isEditing ? { nodeId, mode: "edit" } : null });
+    },
+    [updateMyPresence],
+  );
+
+  const othersLockMap = useMemo(() => {
+    const map = new Map<
+      string,
+      { color: string; name: string; mode: "edit" | "drag" }
+    >();
+    for (const other of others) {
+      const lock = other.presence.lock;
+      if (lock && other.info) {
+        map.set(lock.nodeId, {
+          color: other.info.color,
+          name: other.info.name,
+          mode: lock.mode,
+        });
+      }
+    }
+    return map;
+  }, [others]);
+
+  // ===== END PRESENCE =====
   const [dragDecision, setDragDecision] = useState<DragDecision | null>(null);
   const dragOriginRef = useRef<{
     id: string;
@@ -233,16 +353,20 @@ function EditorCanvas({ mindMap, role }: Props) {
     null,
   );
 
-  const onNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
-    e.preventDefault();
-    useMindMapStore.setState((state) => ({
-      nodes: state.nodes.map((n) => ({
-        ...n,
-        selected: n.id === node.id,
-      })),
-    }));
-    setContextMenu({ nodeId: node.id, x: e.clientX, y: e.clientY });
-  }, []);
+  const onNodeContextMenu = useCallback(
+    (e: React.MouseEvent, node: Node) => {
+      e.preventDefault();
+      if (othersLockMap.has(node.id)) return;
+      useMindMapStore.setState((state) => ({
+        nodes: state.nodes.map((n) => ({
+          ...n,
+          selected: n.id === node.id,
+        })),
+      }));
+      setContextMenu({ nodeId: node.id, x: e.clientX, y: e.clientY });
+    },
+    [othersLockMap],
+  );
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
@@ -393,15 +517,19 @@ function EditorCanvas({ mindMap, role }: Props) {
     [scheduleImageDelete],
   );
 
-  const handleImageFocus = useCallback((nodeId: string) => {
-    useMindMapStore.setState((state) => ({
-      nodes: state.nodes.map((n) => ({
-        ...n,
-        selected: n.id === nodeId,
-      })),
-    }));
-    setFocusedImageNodeId(nodeId);
-  }, []);
+  const handleImageFocus = useCallback(
+    (nodeId: string) => {
+      if (othersLockMap.has(nodeId)) return;
+      useMindMapStore.setState((state) => ({
+        nodes: state.nodes.map((n) => ({
+          ...n,
+          selected: n.id === nodeId,
+        })),
+      }));
+      setFocusedImageNodeId(nodeId);
+    },
+    [othersLockMap],
+  );
 
   const handleToggleCollapse = useCallback(
     (nodeId: string) => {
@@ -426,10 +554,41 @@ function EditorCanvas({ mindMap, role }: Props) {
   );
 
   // Dipanggil langsung dari MindMapNode saat gambar selesai render (onLoad
-  // atau cache-hit). Sengaja gak lewat flag needsLayout + dimension event,
-  // karena timingnya racy (ResizeObserver bisa fire sebelum flag nyala).
-  const handleImageSettled = useCallback(() => {
-    requestAnimationFrame(() => runLayout());
+  // atau cache-hit). Gak bisa asumsi 1 rAF pasti cukup — node.measured
+  // (width/height) di-update ASYNC lewat ResizeObserver React Flow sendiri,
+  // kadang belum sempat ke-propagate ke store pas rAF pertama jalan (measured
+  // masih ukuran lama, belum kebesaran gambar). Solusinya: poll measured tiap
+  // rAF, baru runLayout() begitu measured STABIL (sama persis 2 tick
+  // berturut-turut), dengan batas maksimal biar gak nunggu selamanya kalau
+  // ada kasus aneh (node keburu kehapus, dsb).
+  const handleImageSettled = useCallback((nodeId: string) => {
+    let lastSize: { w?: number; h?: number } | null = null;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 10; // ~166ms di 60fps
+
+    function check() {
+      attempts++;
+      const node = useMindMapStore
+        .getState()
+        .nodes.find((n) => n.id === nodeId);
+      const size = { w: node?.measured?.width, h: node?.measured?.height };
+      const stable =
+        lastSize !== null &&
+        size.w !== undefined &&
+        size.h !== undefined &&
+        size.w === lastSize.w &&
+        size.h === lastSize.h;
+
+      if (stable || attempts >= MAX_ATTEMPTS) {
+        runLayout();
+        return;
+      }
+
+      lastSize = size;
+      requestAnimationFrame(check);
+    }
+
+    requestAnimationFrame(check);
   }, []);
 
   // ===== END CONTEXT MENU =====
@@ -437,20 +596,26 @@ function EditorCanvas({ mindMap, role }: Props) {
   const handleAddChild = useCallback(
     (nodeId: string) => {
       if (!canEdit) return;
+      if (othersLockMap.has(nodeId)) return;
       const newId = addChild(nodeId);
       if (newId) requestAnimationFrame(() => runLayout(newId));
     },
-    [addChild, canEdit],
+    [addChild, canEdit, othersLockMap],
   );
-  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    useMindMapStore.setState((state) => ({
-      nodes: state.nodes.map((n) => ({
-        ...n,
-        selected: n.id === node.id,
-      })),
-    }));
-    setFocusedImageNodeId(null);
-  }, []);
+
+  const onNodeClick = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      if (othersLockMap.has(node.id)) return;
+      useMindMapStore.setState((state) => ({
+        nodes: state.nodes.map((n) => ({
+          ...n,
+          selected: n.id === node.id,
+        })),
+      }));
+      setFocusedImageNodeId(null);
+    },
+    [othersLockMap],
+  );
 
   const onPaneClick = useCallback(
     (e: React.MouseEvent) => {
@@ -641,8 +806,11 @@ function EditorCanvas({ mindMap, role }: Props) {
   function onNodeDragStart(_: MouseEvent | TouchEvent, node: Node) {
     if (!canEdit) return;
     if (node.data?.isRoot) return;
+    if (othersLockMap.has(node.id)) return;
     dragOriginRef.current = { id: node.id, position: { ...node.position } };
     previousTargetRef.current = null;
+
+    updateMyPresence({ lock: { nodeId: node.id, mode: "drag" } });
 
     // Shadow node
     setDraggingNodeId(node.id);
@@ -714,6 +882,8 @@ function EditorCanvas({ mindMap, role }: Props) {
   function onNodeDragStop(_: MouseEvent | TouchEvent, node: Node) {
     if (!canEdit) return;
     if (node.data?.isRoot) return;
+
+    updateMyPresence({ lock: null });
 
     // Clear shadow
     setDraggingNodeId(null);
@@ -1026,7 +1196,7 @@ function EditorCanvas({ mindMap, role }: Props) {
       return {
         ...n,
         hidden: hiddenNodeIds.has(n.id),
-        draggable: !n.data?.isRoot && canEdit,
+        draggable: !n.data?.isRoot && canEdit && !othersLockMap.has(n.id),
         style: draggingNodeId === n.id ? { opacity: 0.3 } : undefined,
         data: {
           ...n.data,
@@ -1042,8 +1212,11 @@ function EditorCanvas({ mindMap, role }: Props) {
           onImageSettled: handleImageSettled,
           onLabelChange: updateNodeLabel,
           onToggleCollapse: handleToggleCollapse,
+          onEditingChange: handleEditingChange,
           canvasTheme: canvasTheme,
           canEdit,
+          othersFocus: othersFocusMap.get(n.id) ?? null,
+          othersLock: othersLockMap.get(n.id) ?? null,
         },
       };
     });
@@ -1060,6 +1233,9 @@ function EditorCanvas({ mindMap, role }: Props) {
     handleImageSettled,
     theme,
     canEdit,
+    othersFocusMap,
+    handleEditingChange,
+    othersLockMap,
   ]);
 
   const displayEdges = useMemo(() => {
@@ -1158,6 +1334,13 @@ function EditorCanvas({ mindMap, role }: Props) {
         if (focusedImageNodeId) return;
         e.preventDefault();
         selectAll();
+        if (othersLockMap.size > 0) {
+          useMindMapStore.setState((state) => ({
+            nodes: state.nodes.map((n) =>
+              othersLockMap.has(n.id) ? { ...n, selected: false } : n,
+            ),
+          }));
+        }
         return;
       }
 
@@ -1199,6 +1382,20 @@ function EditorCanvas({ mindMap, role }: Props) {
           idsToClean.push(cid);
           stack.push(...(cMapForDelete.get(cid) ?? []));
         }
+
+        // Delete-lock: cek FULL cascade set (bukan cuma yang langsung
+        // diselect) — kalau ADA satu aja yang lagi dilock user lain
+        // (edit ATAU drag), batal SEMUA, jangan hapus partial.
+        const lockedInCascade = idsToClean.some((cid) =>
+          othersLockMap.has(cid),
+        );
+        if (lockedInCascade) {
+          alert(
+            "Gak bisa hapus — ada node yang lagi diedit/di-drag collaborator lain.",
+          );
+          return;
+        }
+
         cleanupImagesForNodes(idsToClean);
 
         setFocusedImageNodeId(null);
@@ -1262,6 +1459,7 @@ function EditorCanvas({ mindMap, role }: Props) {
         if (selectedNodes.length === 0) return;
         const newIds: string[] = [];
         for (const node of selectedNodes) {
+          if (othersLockMap.has(node.id)) continue; // locked: cuma boleh add-sibling
           const newId = addChild(node.id, true);
           if (newId) newIds.push(newId);
         }
@@ -1294,6 +1492,7 @@ function EditorCanvas({ mindMap, role }: Props) {
         const { nodes: latestNodes } = useMindMapStore.getState(); // ← fresh
         const selected = latestNodes.find((n) => n.selected) ?? null;
         if (!selected) return;
+        if (othersLockMap.has(selected.id)) return;
         e.preventDefault();
         setNodes((nds) =>
           nds.map((n) =>
@@ -1343,6 +1542,7 @@ function EditorCanvas({ mindMap, role }: Props) {
         }
 
         if (!targetId) return;
+        if (othersLockMap.has(targetId)) return;
 
         useMindMapStore.setState((state) => ({
           nodes: state.nodes.map((n) => ({
@@ -1373,6 +1573,7 @@ function EditorCanvas({ mindMap, role }: Props) {
     pasteNode,
     selectAll,
     canEdit,
+    othersLockMap,
   ]);
 
   return (

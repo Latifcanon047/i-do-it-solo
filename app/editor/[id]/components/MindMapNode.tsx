@@ -82,10 +82,24 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   const onToggleCollapse = data.onToggleCollapse as
     | ((nodeId: string, collapsed: boolean) => void)
     | undefined;
-  const onImageSettled = data.onImageSettled as (() => void) | undefined;
+  const onImageSettled = data.onImageSettled as
+    | ((nodeId: string) => void)
+    | undefined;
+  const onEditingChange = data.onEditingChange as
+    | ((nodeId: string, editing: boolean) => void)
+    | undefined;
+  const othersLock = data.othersLock as
+    | { color: string; name: string; mode: "edit" | "drag" }
+    | null
+    | undefined;
+  const canAddChild = canEdit && !othersLock;
   const imageUrl = data.imageUrl as string | undefined;
   const imageUploading = !!data.imageUploading;
   const imageFocused = !!data.imageFocused;
+  const othersFocus = data.othersFocus as
+    | { color: string; name: string }
+    | null
+    | undefined;
   // Saat gambar fokus, ring/tombol node harus "diam" — fokus visual pindah ke gambar
   const nodeVisuallyFocused = selected && !imageFocused;
   const minWidth = isRoot ? 160 : isDirectChildOfRoot ? 140 : 100;
@@ -128,6 +142,17 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
     }
   }, [data.editing]);
 
+  // Broadcast status "lagi ngedit" ke Presence tiap kali `editing` BENERAN
+  // berubah (bukan tiap render) — dipakai EditorClient buat lock select/drag
+  // node ini di sisi collaborator lain selama masih true.
+  const prevEditingRef = useRef(editing);
+  useEffect(() => {
+    if (prevEditingRef.current !== editing) {
+      prevEditingRef.current = editing;
+      onEditingChange?.(id, editing);
+    }
+  }, [editing, id, onEditingChange]);
+
   const [prevDataLabel, setPrevDataLabel] = useState(data.label as string);
   if (data.label !== prevDataLabel) {
     setPrevDataLabel(data.label as string);
@@ -138,7 +163,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
   // gak bakal fire — trigger relayout manual di sini sebagai fallback.
   useEffect(() => {
     if (imgRef.current?.complete) {
-      onImageSettled?.();
+      onImageSettled?.(id);
     }
   }, [imageUrl]);
 
@@ -160,10 +185,18 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
   function handleDoubleClick() {
     if (!canEdit) return;
+    if (othersLock) return;
     setEditing(true);
   }
 
   function handleBlur() {
+    // Window kehilangan OS-focus (alt+tab, klik app lain) juga fire blur
+    // event di textarea walau secara logic user gak "pindah ke elemen lain
+    // di halaman ini" — jangan commit-close edit mode buat kasus ini,
+    // biar mode edit tetap kepegang begitu window difokusin lagi.
+    if (!document.hasFocus()) {
+      return;
+    }
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -241,14 +274,18 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
     <div
       className={`relative rounded-xl border-2 shadow-sm text-center cursor-pointer transition ${ringClass} ${edgeIndicatorClass}`}
       style={{
-        backgroundColor: bgColor,
-        borderColor: borderColor,
+        backgroundColor: othersLock ? "#d1d5db" : bgColor,
+        borderColor: othersLock ? othersLock.color : borderColor,
         minWidth,
         minHeight,
         width: "max-content",
         maxWidth: 300,
         ...paddingStyle,
+        ...(othersFocus
+          ? { outline: `2px solid ${othersFocus.color}`, outlineOffset: 2 }
+          : {}),
       }}
+      title={othersFocus ? `Dipilih oleh ${othersFocus.name}` : undefined}
       onDoubleClick={handleDoubleClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -269,6 +306,7 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
       {!imageUploading && imageUrl && (
         <div
           className="relative mb-2 flex justify-center cursor-pointer"
+          style={othersLock ? { opacity: 0.5 } : undefined}
           onClick={handleImageClick}
           onMouseDown={(e) => e.stopPropagation()}
         >
@@ -281,20 +319,23 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
             }`}
             style={{ maxWidth: 240, maxHeight: 180 }}
             draggable={false}
-            onLoad={() => onImageSettled?.()}
+            onLoad={() => onImageSettled?.(id)}
           />
         </div>
       )}
 
       {/* Content area */}
-      <div className="flex items-center justify-center gap-1.5">
+      <div
+        className="flex items-center justify-center gap-1.5"
+        style={othersLock ? { opacity: 0.5 } : undefined}
+      >
+        {" "}
         {IconComponent && (
           <IconComponent
             size={isRoot ? 18 : isDirectChildOfRoot ? 16 : 14}
             className="text-gray-700 shrink-0"
           />
         )}
-
         {/* Span dan textarea bergantian di flow normal — tidak ada overlay */}
         {editing ? (
           <textarea
@@ -345,11 +386,11 @@ export default function MindMapNode({ id, data, selected }: NodeProps) {
 
       {nodeVisuallyFocused && !collapsed && (
         <button
-          onClick={canEdit ? handleAddChild : undefined}
+          onClick={canAddChild ? handleAddChild : undefined}
           onMouseDown={(e) => e.stopPropagation()}
-          disabled={!canEdit}
+          disabled={!canAddChild}
           className={`absolute -right-6 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border shadow flex items-center justify-center text-white z-10 ${
-            canEdit
+            canAddChild
               ? "bg-blue-500 border-blue-600 hover:bg-blue-600"
               : "bg-blue-500/40 border-blue-600/40 cursor-not-allowed"
           }`}
