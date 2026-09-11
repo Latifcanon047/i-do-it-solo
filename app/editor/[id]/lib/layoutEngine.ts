@@ -103,6 +103,7 @@ export function layoutForest(
   function layoutNode(
     nodeId: string,
     parentId: string | null,
+    anchorX?: number,
   ): { centerY: number; subtreeBottom: number } {
     const startY = cursorY; // batas atas yang tersedia untuk node ini + subtree-nya
     const node = nodeMap.get(nodeId);
@@ -115,7 +116,7 @@ export function layoutForest(
     // Hitung X
     let x: number;
     if (parentId === null) {
-      x = node?.position.x ?? 0;
+      x = anchorX ?? node?.position.x ?? 0;
     } else {
       const parentPos = positions.get(parentId)!;
       const parentNode = nodeMap.get(parentId);
@@ -188,7 +189,8 @@ export function layoutForest(
 
   for (const orphan of orphanNodes) {
     cursorY = (orphan.data?.orphanAnchorY as number) ?? orphan.position.y;
-    layoutNode(orphan.id, null);
+    const anchorX = (orphan.data?.orphanAnchorX as number) ?? orphan.position.x;
+    layoutNode(orphan.id, null, anchorX);
   }
 
   return positions;

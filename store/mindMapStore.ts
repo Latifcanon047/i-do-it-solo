@@ -224,8 +224,15 @@ interface MindMapStore {
   addChild: (parentId: string, _skipHistory?: boolean) => string | null;
   addSibling: (nodeId: string, _skipHistory?: boolean) => string | null;
   deleteSelected: () => void;
-  commitDragDecision: (decision: DragDecision) => void;
+  commitDragDecision: (
+    decision: DragDecision,
+    originPosition: { x: number; y: number },
+  ) => void;
   orphanNode: (nodeId: string) => void;
+  updateNodePosition: (
+    nodeId: string,
+    fromPosition: { x: number; y: number },
+  ) => void;
   updateNodeStyle: (nodeId: string, style: Record<string, unknown>) => void;
   updateNodeLabel: (nodeId: string, label: string) => void;
   setSaveStatus: (status: SaveStatus) => void;
@@ -963,7 +970,12 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
 
     const before = { data: node.data };
     const after = {
-      data: { ...node.data, isOrphan: true, orphanAnchorY: node.position.y },
+      data: {
+        ...node.data,
+        isOrphan: true,
+        orphanAnchorY: node.position.y,
+        orphanAnchorX: node.position.x,
+      },
     };
 
     const ops: HistoryOp[] = [];
@@ -989,9 +1001,79 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     get().commitHistory();
   },
 
-  commitDragDecision: (decision) => {
+  // Fix (Sesi 34): "before" HARUS dari posisi drag-origin (fromPosition,
+  // dikirim caller), BUKAN baca ulang node.position dari store — karena
+  // React Flow sync posisi live ke store SELAMA drag (bukan cuma pas
+  // dilepas), jadi node.position di sini udah keburu jadi posisi BARU.
+  // Kalau before dibaca dari situ, before === after (no-op), X gak pernah
+  // kebalik pas undo.
+  updateNodePosition: (nodeId, fromPosition) => {
+    const { nodes } = get();
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    const before = {
+      position: fromPosition,
+      data: node.data?.isOrphan
+        ? {
+            ...node.data,
+            orphanAnchorY: fromPosition.y,
+            orphanAnchorX: fromPosition.x,
+          }
+        : node.data,
+    };
+    const after = {
+      position: node.position,
+      data: node.data?.isOrphan
+        ? {
+            ...node.data,
+            orphanAnchorY: node.position.y,
+            orphanAnchorX: node.position.x,
+          }
+        : node.data,
+    };
+
+    // Posisi (x,y) udah sesuai (di-sync live oleh React Flow selama drag) —
+    // yang perlu di-set manual di sini cuma orphanAnchorY-nya.
+    set((state) => ({
+      nodes: state.nodes.map((n) =>
+        n.id === nodeId ? { ...n, data: after.data } : n,
+      ),
+    }));
+
+    get()._recordOps([
+      { kind: "node", type: "update", id: nodeId, before, after },
+    ]);
+    get().commitHistory();
+  },
+
+  commitDragDecision: (decision, originPosition) => {
     if (decision.type === "BLOCK") return;
-    const { edges } = get();
+    const { edges, nodes } = get();
+
+    // Fix (Sesi 34): kalau node yang di-drag ini orphan, clear isOrphan-nya
+    // HARUS ikut tercatat ke history (bukan raw setState) — biar undo bisa
+    // balikin status orphan-nya, dan layoutForest gak salah nganggep dia
+    // "root" tree biasa. Posisi "before" pakai originPosition (posisi
+    // SEBELUM drag ini mulai, dikirim caller) — bukan node.position dari
+    // store, karena itu udah ke-sync live ke posisi drop terakhir.
+    const draggedNode = nodes.find((n) => n.id === decision.dragId);
+    const wasOrphan = !!draggedNode?.data?.isOrphan;
+    const orphanClearOps: HistoryOp[] =
+      wasOrphan && draggedNode
+        ? [
+            {
+              kind: "node",
+              type: "update",
+              id: decision.dragId,
+              before: { position: originPosition, data: draggedNode.data },
+              after: {
+                position: draggedNode.position,
+                data: { ...draggedNode.data, isOrphan: false },
+              },
+            },
+          ]
+        : [];
 
     if (decision.type === "REPARENT") {
       const oldEdgeIndex = edges.findIndex((e) => e.target === decision.dragId);
@@ -1003,7 +1085,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       };
       const filtered = edges.filter((e) => e.target !== decision.dragId);
 
-      const ops: HistoryOp[] = [];
+      const ops: HistoryOp[] = [...orphanClearOps];
       if (oldEdge) {
         ops.push({
           kind: "edge",
@@ -1019,7 +1101,18 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         afterId: filtered.length > 0 ? filtered[filtered.length - 1].id : null,
       });
 
-      set(() => ({ edges: [...filtered, newEdge] }));
+      set((state) => ({
+        edges: [...filtered, newEdge],
+        nodes: wasOrphan
+          ? state.nodes.map((n) =>
+              n.id === decision.dragId
+                ? { ...n, data: { ...n.data, isOrphan: false } }
+                : n,
+            )
+          : state.nodes,
+      }));
+
+      const afterCommitNode = get().nodes.find((n) => n.id === decision.dragId);
 
       get()._recordOps(ops);
       if (oldEdge && oldEdge.id !== newEdge.id) {
@@ -1033,7 +1126,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const oldEdge = oldEdgeIndex >= 0 ? edges[oldEdgeIndex] : null;
     const filtered = edges.filter((e) => e.target !== decision.dragId);
 
-    const ops: HistoryOp[] = [];
+    const ops: HistoryOp[] = [...orphanClearOps];
     if (oldEdge) {
       ops.push({
         kind: "edge",
@@ -1044,7 +1137,16 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     }
 
     if (!decision.newParentId) {
-      set(() => ({ edges: filtered }));
+      set((state) => ({
+        edges: filtered,
+        nodes: wasOrphan
+          ? state.nodes.map((n) =>
+              n.id === decision.dragId
+                ? { ...n, data: { ...n.data, isOrphan: false } }
+                : n,
+            )
+          : state.nodes,
+      }));
       get()._recordOps(ops);
       if (oldEdge) get()._recordRemovals([], [oldEdge.id]);
       get().commitHistory();
@@ -1068,7 +1170,16 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
 
     ops.push({ kind: "edge", type: "add", edge: newEdge, afterId });
 
-    set(() => ({ edges: insertEdgeAfter(filtered, newEdge, afterId) }));
+    set((state) => ({
+      edges: insertEdgeAfter(filtered, newEdge, afterId),
+      nodes: wasOrphan
+        ? state.nodes.map((n) =>
+            n.id === decision.dragId
+              ? { ...n, data: { ...n.data, isOrphan: false } }
+              : n,
+          )
+        : state.nodes,
+    }));
     get()._recordOps(ops);
     if (oldEdge && oldEdge.id !== newEdge.id) {
       get()._recordRemovals([], [oldEdge.id]);

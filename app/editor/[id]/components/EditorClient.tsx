@@ -325,6 +325,7 @@ function EditorCanvas({ mindMap, role }: Props) {
   const previousTargetRef = useRef<string | null>(null);
   const commitDragDecision = useMindMapStore((s) => s.commitDragDecision);
   const orphanNode = useMindMapStore((s) => s.orphanNode);
+  const updateNodePosition = useMindMapStore((s) => s.updateNodePosition);
   const copyNode = useMindMapStore((s) => s.copyNode);
   const pasteNode = useMindMapStore((s) => s.pasteNode);
   const selectAll = useMindMapStore((s) => s.selectAll);
@@ -785,7 +786,16 @@ function EditorCanvas({ mindMap, role }: Props) {
       .sort()
       .join(",");
 
-    return `${edgeSig}|${collapsedSig}`;
+    // Sesi 34: orphan yang di-drag-geser (bukan reparent) gak ubah edges,
+    // jadi butuh masuk signature manual — biar undo/redo posisi orphan
+    // ikut retrigger relayout descendant-nya.
+    const orphanSig = nodes
+      .filter((n) => n.data?.isOrphan)
+      .map((n) => `${n.id}:${n.data?.orphanAnchorY}:${n.data?.orphanAnchorX}`)
+      .sort()
+      .join(",");
+
+    return `${edgeSig}|${collapsedSig}|${orphanSig}`;
   }, [edges, nodes]);
 
   useEffect(() => {
@@ -914,28 +924,16 @@ function EditorCanvas({ mindMap, role }: Props) {
       );
       return;
     } else if (decision) {
-      // Hapus isOrphan flag sebelum commit — HARUS lewat Zustand store
-      useMindMapStore.setState((state) => ({
-        nodes: state.nodes.map((n) =>
-          n.id === decision.dragId
-            ? { ...n, data: { ...n.data, isOrphan: false } }
-            : n,
-        ),
-      }));
-      commitDragDecision(decision);
+      // isOrphan clear sekarang ditangani DI DALAM commitDragDecision
+      // (store), atomically bareng edge ops — biar undo/redo bisa balikin
+      // status orphan + posisi yang benar juga, bukan cuma edge doang.
+      commitDragDecision(decision, origin.position);
     } else {
       // Node di-drag tapi gak nge-hit target manapun.
       if (node.data?.isOrphan) {
-        // Udah orphan sebelumnya, cuma digeser-geser — update anchor-nya
-        // biar posisi baru gak ke-reset balik pas relayout, LALU lanjut relayout
-        // children-nya biar ikut ngikutin posisi baru.
-        useMindMapStore.setState((state) => ({
-          nodes: state.nodes.map((n) =>
-            n.id === node.id
-              ? { ...n, data: { ...n.data, orphanAnchorY: node.position.y } }
-              : n,
-          ),
-        }));
+        // Udah orphan sebelumnya, cuma digeser-geser — lewat store action
+        // biar tercatat ke history (bisa di-undo/redo), bukan setState mentah.
+        updateNodePosition(node.id, origin.position);
       } else {
         // Belum orphan — jadiin orphan baru, gak perlu layout tambahan
         // karena orphanNode() sendiri gak nambah/ubah children.
