@@ -80,41 +80,47 @@ export function useLiveblocksSync(
       const liveNodes = snapshot.get("nodes");
       const liveEdges = snapshot.get("edges");
 
-      // Push node yang baru/berubah
-      for (const n of nodes) {
-        const existing = liveNodes.get(n.id);
-        const storageNode = toStorageNode(n);
-        if (!existing || nodeChanged(n, existing)) {
-          liveNodes.set(n.id, new LiveObject(storageNode));
+      // Fix (Sesi 36): bungkus SEMUA mutasi Storage (node add/update, edge
+      // add/update, node/edge delete) dalam 1 batch — biar Liveblocks
+      // nge-echo-in ini sebagai SATU event storage-change ke semua client
+      // (termasuk tab pengirim sendiri), bukan puluhan event terpisah per
+      // .set()/.delete().
+      room.batch(() => {
+        // Push node yang baru/berubah
+        for (const n of nodes) {
+          const existing = liveNodes.get(n.id);
+          const storageNode = toStorageNode(n);
+          if (!existing || nodeChanged(n, existing)) {
+            liveNodes.set(n.id, new LiveObject(storageNode));
+          }
         }
-      }
 
-      // Push edge yang baru/berubah (kirim index array sebagai `order`,
-      // biar urutan sibling bisa direkonstruksi lagi di inbound — LiveMap
-      // gak menjamin urutan iterasi sama kayak urutan insert asli)
-      edges.forEach((e, i) => {
-        const existing = liveEdges.get(e.id);
-        const storageEdge = toStorageEdge(e, i);
-        if (!existing || edgeChanged(e, i, existing)) {
-          liveEdges.set(e.id, new LiveObject(storageEdge));
+        // Push edge yang baru/berubah (kirim index array sebagai `order`,
+        // biar urutan sibling bisa direkonstruksi lagi di inbound — LiveMap
+        // gak menjamin urutan iterasi sama kayak urutan insert asli)
+        edges.forEach((e, i) => {
+          const existing = liveEdges.get(e.id);
+          const storageEdge = toStorageEdge(e, i);
+          if (!existing || edgeChanged(e, i, existing)) {
+            liveEdges.set(e.id, new LiveObject(storageEdge));
+          }
+        });
+
+        // Hapus node/edge — BUKAN dari diff array vs Storage (gak reliable
+        // multi-tab), tapi dari buffer eksplisit yang cuma keisi kalau user
+        // BENERAN ngehapus lokal di tab ini (deleteSelected / orphanNode /
+        // commitDragDecision / undo / redo).
+        const { nodeIds: nodeIdsToDelete, edgeIds: edgeIdsToDelete } =
+          useMindMapStore.getState().consumePendingRemovals();
+
+        for (const id of nodeIdsToDelete) {
+          liveNodes.delete(id);
+        }
+
+        for (const id of edgeIdsToDelete) {
+          liveEdges.delete(id);
         }
       });
-
-      // Hapus node/edge — BUKAN dari diff array vs Storage (gak reliable
-      // multi-tab: bisa salah nganggep node baru punya tab lain yang belum
-      // sempet ke-sync sebagai "harus dihapus"), tapi dari buffer eksplisit
-      // yang cuma keisi kalau user BENERAN ngehapus lokal di tab ini
-      // (deleteSelected / orphanNode / commitDragDecision / undo / redo).
-      const { nodeIds: nodeIdsToDelete, edgeIds: edgeIdsToDelete } =
-        useMindMapStore.getState().consumePendingRemovals();
-
-      for (const id of nodeIdsToDelete) {
-        liveNodes.delete(id);
-      }
-
-      for (const id of edgeIdsToDelete) {
-        liveEdges.delete(id);
-      }
     }, SYNC_THROTTLE_MS);
 
     return () => {

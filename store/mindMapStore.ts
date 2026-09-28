@@ -1212,6 +1212,27 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       const dataChanged = existing && existing.data !== n.data;
       return {
         ...n,
+        // Fix #3 (Sesi 36, GANTI Fix #2): posisi node itu SEPENUHNYA
+        // derived value — layoutForest SELALU ngitung ulang Y dari nol
+        // berdasarkan edges + tinggi node (dan X dari parent chain /
+        // data.orphanAnchorX buat orphan), gak pernah baca posisi lama
+        // sebagai basis hitungan. Jadi node yang UDAH ADA lokal gak
+        // pernah perlu "percaya" posisi dari remote — remote cuma boleh
+        // nentuin posisi buat node yang BENERAN baru (belum ada lokal
+        // sama sekali), sebagai starting point sebelum relayout pertama
+        // jalan. Kalau ada perubahan struktur/anchor genuine dari tab
+        // lain, itu kebawa lewat edges/data.orphanAnchorX/Y berubah →
+        // structureSignature berubah → auto-relayout lokal tetap jalan.
+        //
+        // GANTI dari Fix #2 (cuma proteksi node "pending"/baru ditambah)
+        // — ternyata race yang sama juga kena node LAMA yang cuma
+        // kegeser Y-nya gara-gara sibling baru numpang masuk di batch
+        // yang sama. Root cause: applyRemoteUpdate gak punya konsep
+        // "basi vs baru" — snapshot Storage yang nyampe belakangan
+        // (network/timing) dianggap kebenaran walau lokal udah lebih
+        // maju. room.batch() (Fix #1) nutup masalah 1-push-jadi-banyak-
+        // echo, tapi gak menjamin urutan ANTAR push yang beda.
+        position: existing ? existing.position : n.position,
         selected: existing?.selected ?? false,
         measured: existing?.measured,
         data: dataChanged ? { ...n.data, needsLayout: true } : n.data,
