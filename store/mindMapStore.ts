@@ -134,9 +134,15 @@ function applyOpsForward(
     else if (op.type === "remove")
       newNodes = newNodes.filter((n) => n.id !== op.node.id);
     else
-      newNodes = newNodes.map((n) =>
-        n.id === op.id ? { ...n, ...op.after } : n,
-      );
+      newNodes = newNodes.map((n) => {
+        if (n.id !== op.id) return n;
+        const { data: dataPatch, ...restAfter } = op.after;
+        return {
+          ...n,
+          ...restAfter,
+          data: dataPatch ? { ...n.data, ...dataPatch } : n.data,
+        };
+      });
   }
 
   for (const op of ops) {
@@ -168,9 +174,15 @@ function applyOpsInverse(
       newNodes = newNodes.filter((n) => n.id !== op.node.id);
     else if (op.type === "remove") newNodes = [...newNodes, op.node];
     else
-      newNodes = newNodes.map((n) =>
-        n.id === op.id ? { ...n, ...op.before } : n,
-      );
+      newNodes = newNodes.map((n) => {
+        if (n.id !== op.id) return n;
+        const { data: dataPatch, ...restBefore } = op.before;
+        return {
+          ...n,
+          ...restBefore,
+          data: dataPatch ? { ...n.data, ...dataPatch } : n.data,
+        };
+      });
   }
 
   for (const op of ops) {
@@ -701,17 +713,28 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const { nodes } = get();
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
-    const before = { data: node.data };
-    const after = { data: { ...node.data, ...style } };
+    // Fix Bug (Sesi 37): before/after cuma nyimpen key yang BENERAN diubah,
+    // bukan clone `data` penuh — biar undo/redo merge per-field, gak nimpa
+    // field lain (label, dll) yang sempat diubah tab lain.
+    const beforePatch: Record<string, unknown> = {};
+    for (const key of Object.keys(style)) {
+      beforePatch[key] = (node.data as Record<string, unknown>)[key];
+    }
 
     set((state) => ({
       nodes: state.nodes.map((n) =>
-        n.id === nodeId ? { ...n, data: after.data } : n,
+        n.id === nodeId ? { ...n, data: { ...n.data, ...style } } : n,
       ),
     }));
 
     get()._recordOps([
-      { kind: "node", type: "update", id: nodeId, before, after },
+      {
+        kind: "node",
+        type: "update",
+        id: nodeId,
+        before: { data: beforePatch },
+        after: { data: { ...style } },
+      },
     ]);
     get().commitHistory();
   },
@@ -720,12 +743,21 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const { nodes } = get();
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
-    const before = { data: { ...node.data, needsLayout: true } };
-    const after = { data: { ...node.data, label, needsLayout: true } };
+    // Fix Bug (Sesi 37): before/after cuma `label`  `needsLayout` — field
+    // `data` lain gak ikut ketimpa pas undo/redo.
+    const before = {
+      data: {
+        label: (node.data as Record<string, unknown>).label,
+        needsLayout: true,
+      },
+    };
+    const after = { data: { label, needsLayout: true } };
 
     set((state) => ({
       nodes: state.nodes.map((n) =>
-        n.id === nodeId ? { ...n, data: after.data } : n,
+        n.id === nodeId
+          ? { ...n, data: { ...n.data, label, needsLayout: true } }
+          : n,
       ),
     }));
 
@@ -741,12 +773,18 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const { nodes } = get();
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
+    // Fix Bug (Sesi 37): before/after cuma nyimpen key yang beneran diubah.
+    const nodeData = node.data as Record<string, unknown>;
     const before = {
-      data: { ...node.data, imageUploading: false, needsLayout: true },
+      data: {
+        imageUrl: nodeData.imageUrl,
+        imagePublicId: nodeData.imagePublicId,
+        imageUploading: false,
+        needsLayout: true,
+      },
     };
     const after = {
       data: {
-        ...node.data,
         imageUrl: url,
         imagePublicId: publicId,
         imageUploading: false,
@@ -756,7 +794,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
 
     set((state) => ({
       nodes: state.nodes.map((n) =>
-        n.id === nodeId ? { ...n, data: after.data } : n,
+        n.id === nodeId ? { ...n, data: { ...n.data, ...after.data } } : n,
       ),
     }));
 
@@ -968,10 +1006,17 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const removedEdgeAfterId =
       removedEdgeIndex > 0 ? edges[removedEdgeIndex - 1].id : null;
 
-    const before = { data: node.data };
+    // Fix Bug (Sesi 37): before/after cuma nyimpen key yang beneran diubah.
+    const nodeData = node.data as Record<string, unknown>;
+    const before = {
+      data: {
+        isOrphan: nodeData.isOrphan,
+        orphanAnchorY: nodeData.orphanAnchorY,
+        orphanAnchorX: nodeData.orphanAnchorX,
+      },
+    };
     const after = {
       data: {
-        ...node.data,
         isOrphan: true,
         orphanAnchorY: node.position.y,
         orphanAnchorX: node.position.x,
@@ -992,7 +1037,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     set((state) => ({
       edges: state.edges.filter((e) => e.target !== nodeId),
       nodes: state.nodes.map((n) =>
-        n.id === nodeId ? { ...n, data: after.data } : n,
+        n.id === nodeId ? { ...n, data: { ...n.data, ...after.data } } : n,
       ),
     }));
 
@@ -1012,34 +1057,45 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
 
-    const before = {
+    // Fix Bug (Sesi 37): kalau BUKAN orphan, `data` sama sekali gak
+    // disertakan di op — jangan ikut nyimpen snapshot `node.data` yang
+    // "gak berubah", karena itu tetap bisa nimpa field lain punya tab lain
+    // pas undo/redo. Kalau orphan, cuma orphanAnchorX/Y yang dicatat.
+    const isOrphan = !!node.data?.isOrphan;
+    const before: Partial<Node> = {
       position: fromPosition,
-      data: node.data?.isOrphan
-        ? {
-            ...node.data,
-            orphanAnchorY: fromPosition.y,
-            orphanAnchorX: fromPosition.x,
-          }
-        : node.data,
+      ...(isOrphan && {
+        data: { orphanAnchorY: fromPosition.y, orphanAnchorX: fromPosition.x },
+      }),
     };
-    const after = {
+    const after: Partial<Node> = {
       position: node.position,
-      data: node.data?.isOrphan
-        ? {
-            ...node.data,
-            orphanAnchorY: node.position.y,
-            orphanAnchorX: node.position.x,
-          }
-        : node.data,
+      ...(isOrphan && {
+        data: {
+          orphanAnchorY: node.position.y,
+          orphanAnchorX: node.position.x,
+        },
+      }),
     };
 
     // Posisi (x,y) udah sesuai (di-sync live oleh React Flow selama drag) —
-    // yang perlu di-set manual di sini cuma orphanAnchorY-nya.
-    set((state) => ({
-      nodes: state.nodes.map((n) =>
-        n.id === nodeId ? { ...n, data: after.data } : n,
-      ),
-    }));
+    // yang perlu di-set manual di sini cuma orphanAnchorY/X-nya (kalau orphan).
+    if (isOrphan) {
+      set((state) => ({
+        nodes: state.nodes.map((n) =>
+          n.id === nodeId
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  orphanAnchorY: node.position.y,
+                  orphanAnchorX: node.position.x,
+                },
+              }
+            : n,
+        ),
+      }));
+    }
 
     get()._recordOps([
       { kind: "node", type: "update", id: nodeId, before, after },
@@ -1066,10 +1122,15 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
               kind: "node",
               type: "update",
               id: decision.dragId,
-              before: { position: originPosition, data: draggedNode.data },
+              // Fix Bug (Sesi 37): before/after cuma `isOrphan`, bukan
+              // clone `data` penuh milik draggedNode.
+              before: {
+                position: originPosition,
+                data: { isOrphan: true },
+              },
               after: {
                 position: draggedNode.position,
-                data: { ...draggedNode.data, isOrphan: false },
+                data: { isOrphan: false },
               },
             },
           ]
