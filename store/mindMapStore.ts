@@ -530,8 +530,8 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         kind: "node",
         type: "update",
         id: parentId,
-        before: { data: parent.data },
-        after: { data: { ...parent.data, collapsed: false } },
+        before: { data: { collapsed: true } },
+        after: { data: { collapsed: false } },
       });
     }
 
