@@ -854,6 +854,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         isRoot,
         isOrphan,
         orphanAnchorY,
+        orphanAnchorX,
         needsLayout,
         editing,
         imageUploading,
@@ -918,6 +919,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         if (mode === "orphan") {
           data.isOrphan = true;
           data.orphanAnchorY = position.y;
+          data.orphanAnchorX = position.x;
         }
       }
       if (snap.image) {
@@ -1172,8 +1174,6 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
             )
           : state.nodes,
       }));
-
-      const afterCommitNode = get().nodes.find((n) => n.id === decision.dragId);
 
       get()._recordOps(ops);
       if (oldEdge && oldEdge.id !== newEdge.id) {

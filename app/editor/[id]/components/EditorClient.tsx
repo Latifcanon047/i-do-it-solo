@@ -1228,7 +1228,6 @@ function EditorCanvas({ mindMap, role }: Props) {
     focusedImageNodeId,
     handleImageFocus,
     handleImageSettled,
-    handleImageSettled,
     theme,
     canEdit,
     othersFocusMap,
